@@ -15,7 +15,7 @@ from typing import Dict, Optional, Set, Tuple
 
 import pygame
 
-from . import config, input as input_mod, levels
+from . import config, demo_ai, input as input_mod, levels
 from .entities import Direction, Scotty
 from .ghosts import Ghost, GhostMode, ScatterChaseClock, apply_phase_change, create_ghosts
 from .input import RawInput
@@ -33,6 +33,7 @@ class GameState(Enum):
     DYING = auto()
     LEVEL_CLEAR = auto()
     GAME_OVER = auto()
+    DEMO = auto()  # self-playing attract-mode demo, entered after idling on ATTRACT
 
 
 READY_SECONDS = 2.0
@@ -94,6 +95,15 @@ class Game:
         self.menu_index = 0
         self._menu_last_direction: Optional[Direction] = None
         self._menu_last_confirm = False
+
+        # Attract mode: how long the main menu has sat with no genuine
+        # input (see config.DEMO_IDLE_SECONDS and _any_genuine_input()).
+        # Reset to 0 every time ATTRACT is (re)entered from anywhere, so
+        # it always re-arms for another full idle period. _pre_demo_score
+        # holds the real ScoreBoard while a demo is running -- see
+        # _enter_demo()/_exit_demo() -- and is None the rest of the time.
+        self._menu_idle_seconds = 0.0
+        self._pre_demo_score: Optional[ScoreBoard] = None
 
         # pygame handles, created lazily by run()/init_display()
         self.screen = None
@@ -173,12 +183,26 @@ class Game:
             self._input_settle_remaining = max(0.0, self._input_settle_remaining - dt)
 
         if self.state is GameState.ATTRACT:
+            if self._any_genuine_input(raw):
+                self._menu_idle_seconds = 0.0
+            else:
+                self._menu_idle_seconds += dt
+                if self._menu_idle_seconds >= config.DEMO_IDLE_SECONDS:
+                    self._enter_demo()
+                    return
             self._update_menu(raw)
+            return
+
+        if self.state is GameState.DEMO:
+            if self._any_genuine_input(raw):
+                self._exit_demo()
+                return
+            self._update_demo(dt)
             return
 
         if self.state is GameState.HOW_TO_PLAY:
             if self._menu_confirm_pressed(raw):  # also allowed, friendlier than back-only
-                self.state = GameState.ATTRACT
+                self._return_to_menu_abandoning_game()
             return
 
         if self.state is GameState.READY:
@@ -218,8 +242,7 @@ class Game:
 
         if self.state is GameState.GAME_OVER:
             if self._menu_confirm_pressed(raw):
-                self.state = GameState.ATTRACT
-                self.menu_index = 0
+                self._return_to_menu_abandoning_game()
             return
 
     # -- main menu / how to play --------------------------------------------------
@@ -267,6 +290,100 @@ class Game:
         elif item == MENU_EXIT_TO_GALLERY:
             self._exit_to_gallery()
 
+    # -- attract-mode demo ----------------------------------------------------------
+    def _any_genuine_input(self, raw: RawInput) -> bool:
+        """True if a direction, confirm, or back control is physically
+        active this frame -- used both to drive the main menu's idle
+        timer (config.DEMO_IDLE_SECONDS) and to end the demo the instant
+        a visitor touches anything. A drifting/noisy stick at rest must
+        not count: resolve_direction() already applies the configured
+        deadzone, so only a genuine push registers."""
+        return (
+            input_mod.resolve_direction(raw) is not None
+            or input_mod.wants_confirm(raw)
+            or input_mod.wants_go_back(raw)
+        )
+
+    def _enter_demo(self) -> None:
+        """Attract mode: reuse the real game systems -- level setup,
+        ghost AI, scatter/chase, Cruise Elroy, ghost-house release,
+        pellets, fruit, and collisions, all exactly as in real play --
+        driven by a simple self-playing AI (see :mod:`pacdawg.demo_ai`)
+        instead of real input, so the demo can never drift out of sync
+        with the real game.
+
+        The real ScoreBoard (and the persisted high score it holds) is
+        saved aside untouched and swapped for a disposable one seeded
+        with the same high score, purely so the demo overlay can keep
+        showing it; the disposable one is never committed (see
+        _exit_demo()), so the demo can never write the real high score.
+        """
+        self._pre_demo_score = self.score
+        self.score = ScoreBoard(high_score=self._pre_demo_score.high_score)
+        self._start_level(1)
+        self.state = GameState.DEMO
+
+    def _exit_demo(self) -> None:
+        """Leave the demo -- on any input, or on back -- and land on the
+        main menu without touching real game state: the demo's
+        throwaway score is discarded (never committed), and the real
+        ScoreBoard saved by _enter_demo() is restored exactly as it was
+        before the demo started."""
+        if self._pre_demo_score is not None:
+            self.score = self._pre_demo_score
+            self._pre_demo_score = None
+        self._return_to_menu_abandoning_game()
+
+    def _restart_demo(self) -> None:
+        """Bounds the demo: if the demo Scotty is caught, or the demo
+        maze is somehow cleared, start a fresh demo scene from scratch
+        rather than draining lives into a game-over or advancing levels
+        forever. A brand-new disposable ScoreBoard (still seeded from,
+        and never written back to, the real high score) keeps the demo
+        looking like a clean new attempt rather than a continuation."""
+        self.score = ScoreBoard(high_score=self.score.high_score)
+        self._start_level(1)
+
+    def _update_demo(self, dt: float) -> None:
+        """One demo tick: identical machinery to _update_playing() --
+        ghost AI, scatter/chase, Cruise Elroy, ghost-house release,
+        pellets, fruit, collisions -- with only two differences, both
+        inherent to it being a demo rather than real play: the steering
+        source (demo_ai instead of real input) and what happens on
+        death/level-clear (_restart_demo() instead of the real
+        lives/game-over/level-advance flow)."""
+        direction = demo_ai.choose_direction(self.maze, self.player, self.ghosts)
+        if direction is not None:
+            self.player.queue_direction(direction)
+
+        any_frightened = any(g.mode is GhostMode.FRIGHTENED for g in self.ghosts.values())
+        self.player.speed = (
+            levels.pacman_frightened_speed(self.score.level)
+            if any_frightened
+            else levels.pacman_normal_speed(self.score.level)
+        )
+        self.player.update(self.maze, dt)
+
+        self._release_ghosts_if_due()
+        self._update_cruise_elroy()
+
+        if not any_frightened:
+            phase_changed = self.scatter_clock.update(dt)
+            if phase_changed:
+                apply_phase_change(self.ghosts, self.scatter_clock.phase)
+
+        for ghost in self.ghosts.values():
+            ghost.update(self.maze, dt, self.player, self.ghosts, self.scatter_clock.phase, self.rng)
+
+        self._handle_pellets()
+        self._handle_fruit(dt)
+        if self._handle_ghost_collisions():
+            self._restart_demo()
+            return
+
+        if self.maze.is_complete:
+            self._restart_demo()
+
     def _update_playing(self, dt: float, raw: RawInput) -> None:
         self.life_elapsed += dt
         self._time_since_last_pellet += dt
@@ -298,7 +415,9 @@ class Game:
 
         self._handle_pellets()
         self._handle_fruit(dt)
-        self._handle_ghost_collisions()
+        if self._handle_ghost_collisions():
+            self._on_player_caught()
+            return
 
         if self.maze.is_complete:
             self.state = GameState.LEVEL_CLEAR
@@ -438,7 +557,14 @@ class Game:
             self.score.add_fruit(points)
             self.fruit_active = False
 
-    def _handle_ghost_collisions(self) -> None:
+    def _handle_ghost_collisions(self) -> bool:
+        """Detect and resolve collisions between the player and every
+        hunting/frightened ghost. Eating a frightened ghost is resolved
+        right here (identical for real play and the demo); getting
+        caught by a hunting ghost is *not* -- this returns True and lets
+        the caller decide what "caught" means, since that is the one
+        thing that legitimately differs between real play (lose a life)
+        and the demo (restart cleanly, see Game._update_demo)."""
         px, py = self.player.x, self.player.y
         for ghost in self.ghosts.values():
             if ghost.mode not in (GhostMode.CHASE, GhostMode.SCATTER, GhostMode.FRIGHTENED):
@@ -451,8 +577,8 @@ class Game:
                 self.last_ghost_eaten_points = self.score.add_ghost_eaten()
                 self.last_ghost_eaten_at = self.life_elapsed
             else:
-                self._on_player_caught()
-                return
+                return True
+        return False
 
     def _on_player_caught(self) -> None:
         self.score.lose_life()
@@ -470,10 +596,12 @@ class Game:
           (``sys.exit(0)``) -- there is nothing above the menu to go
           back to, so this is still the launcher's documented top-level
           quit path.
-        - From every other state -- HOW_TO_PLAY, or any state of a game
-          in progress (READY/PLAYING/DYING/LEVEL_CLEAR/GAME_OVER) --
-          back returns to the main menu, treating a game in progress as
-          abandoned (see _return_to_menu_abandoning_game()).
+        - From every other state -- HOW_TO_PLAY, the self-playing DEMO
+          (see _exit_demo()), or any state of a game in progress
+          (READY/PLAYING/DYING/LEVEL_CLEAR/GAME_OVER) -- back returns to
+          the main menu, treating a game in progress as abandoned (see
+          _return_to_menu_abandoning_game()). DEMO is one level below
+          the menu, exactly like gameplay.
 
         So leaving mid-game takes two presses: once back to the menu,
         once more to exit. That is deliberate -- it makes an accidental
@@ -503,21 +631,26 @@ class Game:
 
         if self.state is GameState.ATTRACT:
             self._exit_to_gallery()
+        elif self.state is GameState.DEMO:
+            self._exit_demo()
         else:
             self._return_to_menu_abandoning_game()
 
     def _return_to_menu_abandoning_game(self) -> None:
         """Shared "go back to the main menu" landing spot for every
-        non-ATTRACT state: a game in progress (if any) is treated as
-        abandoned rather than paused -- the high score is committed
-        (harmless no-op if it isn't a new one) so nothing earned is
-        lost, and the menu comes up cleanly. new_game() always fully
-        reinitializes score/level/ghosts from scratch, so START GAME
-        after this is guaranteed to be a genuinely fresh run; nothing
-        about the abandoned game leaks forward."""
+        non-ATTRACT, non-DEMO state: a game in progress (if any) is
+        treated as abandoned rather than paused -- the high score is
+        committed (harmless no-op if it isn't a new one) so nothing
+        earned is lost, and the menu comes up cleanly with its idle
+        timer re-armed for another full config.DEMO_IDLE_SECONDS.
+        new_game() always fully reinitializes score/level/ghosts from
+        scratch, so START GAME after this is guaranteed to be a
+        genuinely fresh run; nothing about the abandoned game leaks
+        forward."""
         self.score.commit_high_score()
         self.state = GameState.ATTRACT
         self.menu_index = 0
+        self._menu_idle_seconds = 0.0
 
     def _exit_to_gallery(self) -> None:
         """The top-level exit path: back from the main menu, or the

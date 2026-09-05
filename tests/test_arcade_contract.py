@@ -58,7 +58,10 @@ class BackOneLevelContractTests(unittest.TestCase):
             with self.subTest(state=state):
                 game = Game(rng=random.Random(0))
                 game.new_game()
-                game.state = state
+                if state is GameState.DEMO:
+                    game._enter_demo()
+                else:
+                    game.state = state
                 try:
                     game.maybe_go_back(raw)
                 except SystemExit:
@@ -110,7 +113,10 @@ class BackOneLevelContractTests(unittest.TestCase):
             with self.subTest(state=state):
                 game = Game(rng=random.Random(0))
                 game.new_game()
-                game.state = state
+                if state is GameState.DEMO:
+                    game._enter_demo()
+                else:
+                    game.state = state
                 exited = False
                 for _ in range(4):
                     try:

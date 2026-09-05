@@ -220,3 +220,10 @@ JOYSTICK_DEADZONE = 0.5
 # after startup, in case anything slips past the seeding. It intentionally
 # does NOT apply to the P1 exit contract, which must remain immediate.
 INPUT_SETTLE_SECONDS = 0.3
+
+# --- Attract mode ----------------------------------------------------------------
+# How long the main menu can sit with no genuine input (buttons, keys, or
+# stick movement past the deadzone) before the game drops into a
+# self-playing demo -- matched to the cabinet's other games (e.g. Street
+# Fighter) for a consistent idle-to-demo feel across the machine.
+DEMO_IDLE_SECONDS = 15.0

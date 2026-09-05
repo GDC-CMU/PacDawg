@@ -432,6 +432,128 @@ class GoBackOneLevelTests(unittest.TestCase):
         self.assertEqual(game.score.level, 1)
 
 
+class AttractModeTests(unittest.TestCase):
+    """The self-playing demo entered after config.DEMO_IDLE_SECONDS of no
+    genuine input on the main menu. It reuses the real game systems
+    (ghost AI, scatter/chase, Cruise Elroy, pellets, fruit, collisions)
+    driven by demo_ai instead of real input, so it can never drift out
+    of sync with real play -- see Game._enter_demo()/_update_demo().
+    """
+
+    IDLE_FRAMES = int(config.DEMO_IDLE_SECONDS * 60)
+
+    def test_stays_on_the_menu_before_the_idle_threshold(self):
+        game = Game(rng=random.Random(60))
+        idle = RawInput()
+        for _ in range(self.IDLE_FRAMES - 1):
+            game.update(1 / 60.0, idle)
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_enters_the_demo_once_the_idle_threshold_is_reached(self):
+        game = Game(rng=random.Random(61))
+        idle = RawInput()
+        for _ in range(self.IDLE_FRAMES + 2):
+            game.update(1 / 60.0, idle)
+        self.assertEqual(game.state, GameState.DEMO)
+
+    def test_any_keyboard_input_exits_the_demo_immediately(self):
+        game = Game(rng=random.Random(62))
+        game._enter_demo()
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_stick_movement_past_the_deadzone_exits_the_demo(self):
+        game = Game(rng=random.Random(63))
+        game._enter_demo()
+        game.update(1 / 60.0, RawInput(axes=((0.0, -1.0),)))
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_noisy_stick_within_the_deadzone_never_resets_the_idle_timer(self):
+        # A drifting/noisy stick at rest must not keep resetting the
+        # timer and prevent attract mode from ever starting.
+        game = Game(rng=random.Random(64))
+        noisy = RawInput(axes=((0.05, -0.05),))  # well under JOYSTICK_DEADZONE
+        for _ in range(self.IDLE_FRAMES + 2):
+            game.update(1 / 60.0, noisy)
+        self.assertEqual(game.state, GameState.DEMO)
+
+    def test_idle_timer_rearms_after_returning_to_the_menu(self):
+        game = Game(rng=random.Random(65))
+        idle = RawInput()
+        for _ in range(self.IDLE_FRAMES + 2):
+            game.update(1 / 60.0, idle)
+        self.assertEqual(game.state, GameState.DEMO)
+
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+        # Idling for just under the threshold again must not re-trigger.
+        for _ in range(self.IDLE_FRAMES - 1):
+            game.update(1 / 60.0, idle)
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+        for _ in range(3):
+            game.update(1 / 60.0, idle)
+        self.assertEqual(game.state, GameState.DEMO)
+
+    def test_p1_from_the_demo_returns_to_the_menu_not_exit(self):
+        game = Game(rng=random.Random(66))
+        game._enter_demo()
+        p1 = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
+        try:
+            game.maybe_go_back(p1)
+        except SystemExit:
+            self.fail("P1 exited the process directly from DEMO")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_game_started_after_the_demo_is_a_clean_fresh_game(self):
+        game = Game(rng=random.Random(67))
+        game._enter_demo()
+        for _ in range(300):  # let the demo actually run for a while
+            game.update(1 / 60.0, RawInput())
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))  # exit the demo
+        self.assertEqual(game.state, GameState.ATTRACT)
+        game.update(1 / 60.0, RawInput())  # release before the fresh confirm press
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))  # START GAME
+        self.assertEqual(game.state, GameState.READY)
+        self.assertEqual(game.score.score, 0)
+        self.assertEqual(game.score.lives, config.STARTING_LIVES)
+        self.assertEqual(game.score.level, 1)
+
+    def test_demo_never_writes_the_high_score(self):
+        game = Game(rng=random.Random(68))
+        real_high_score = game.score.high_score
+        game._enter_demo()
+        for _ in range(1200):  # 20 simulated seconds -- plenty of time to eat pellets
+            game.update(1 / 60.0, RawInput())
+            if game.score.score > 0:
+                break
+        self.assertGreater(game.score.score, 0, "test didn't actually exercise scoring")
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.score.high_score, real_high_score)
+
+    def test_demo_restarts_cleanly_if_the_demo_scotty_is_caught(self):
+        game = Game(rng=random.Random(69))
+        game._enter_demo()
+        ghost = next(iter(game.ghosts.values()))
+        ghost.mode = GhostMode.CHASE
+        ghost.teleport(*game.player.tile)
+        game._update_demo(1 / 60.0)
+        self.assertEqual(game.state, GameState.DEMO)  # restarted in place, not left
+        self.assertEqual(game.score.score, 0)  # a fresh disposable scoreboard
+
+    def test_demo_survives_thousands_of_frames_without_leaving_the_maze(self):
+        game = Game(rng=random.Random(70))
+        game._enter_demo()
+        idle = RawInput()
+        for _ in range(3000):
+            game.update(1 / 60.0, idle)  # must not raise
+            self.assertEqual(game.state, GameState.DEMO)
+            self.assertTrue(-1.5 <= game.player.x <= game.maze.cols + 0.5)
+            self.assertTrue(-0.5 <= game.player.y <= game.maze.rows + 0.5)
+
+
 class HeldButtonAtStartupTests(unittest.TestCase):
     """Regression tests for the "launched from the gallery with the
     select button still held" bug: the ArcadeLauncher's gallery is left

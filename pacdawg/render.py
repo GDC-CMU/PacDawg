@@ -271,7 +271,7 @@ def _draw_dim_panel(screen, center_y: int, height: int) -> None:
     screen.blit(panel, rect)
 
 
-def _draw_hud(screen, game: Game) -> None:
+def _draw_hud(screen, game: Game, total_time: float = 0.0) -> None:
     small = _font(20)
     big = _font(30)
 
@@ -282,9 +282,23 @@ def _draw_hud(screen, game: Game) -> None:
     high_rect = high_surface.get_rect(midtop=(config.SCREEN_WIDTH // 2, 10))
     screen.blit(high_surface, high_rect)
 
-    level_surface = small.render(f"LEVEL {game.score.level}", True, HUD_TEXT_COLOR)
-    level_rect = level_surface.get_rect(topright=(config.SCREEN_WIDTH - 16, 10))
-    screen.blit(level_surface, level_rect)
+    if game.state is GameState.DEMO:
+        # "LEVEL" isn't meaningful for the demo -- a restrained, slowly
+        # pulsing "DEMO" tag in the same slot makes it unmistakable this
+        # is a self-playing showcase, not a stuck real game.
+        pulse_on = int(total_time / 0.5) % 2 == 0
+        demo_color = HUD_ACCENT_COLOR if pulse_on else HUD_DIM_COLOR
+        demo_surface = small.render("DEMO", True, demo_color)
+        demo_rect = demo_surface.get_rect(topright=(config.SCREEN_WIDTH - 16, 10))
+        screen.blit(demo_surface, demo_rect)
+        title_font = _font(18)
+        title_surface = title_font.render("PACDAWG", True, HUD_ACCENT_COLOR)
+        title_rect = title_surface.get_rect(midtop=(config.SCREEN_WIDTH // 2, 34))
+        screen.blit(title_surface, title_rect)
+    else:
+        level_surface = small.render(f"LEVEL {game.score.level}", True, HUD_TEXT_COLOR)
+        level_rect = level_surface.get_rect(topright=(config.SCREEN_WIDTH - 16, 10))
+        screen.blit(level_surface, level_rect)
 
     life_icon = assets.get("life_icon")
     for i in range(max(0, game.score.lives - 1)):
@@ -327,4 +341,4 @@ def draw_frame(screen, game: Game) -> None:
     _draw_scotty(screen, game, total_time)
     for ghost in game.ghosts.values():
         _draw_ghost(screen, ghost, total_time)
-    _draw_hud(screen, game)
+    _draw_hud(screen, game, total_time)

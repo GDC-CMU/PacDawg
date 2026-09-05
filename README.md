@@ -18,6 +18,9 @@ and name are not, and this project doesn't reproduce them.
 - A real, navigable **main menu** (Start Game / How to Play / Exit to
   Gallery), not just a "press start" splash -- shown on launch and again
   after every game over. See [Controls](#controls).
+- A self-playing **attract-mode demo** after 15 seconds of idling on the
+  menu -- the real maze, the real ghost AI, a simple self-playing Scotty
+  -- see [Attract mode](#attract-mode).
 - A dedicated **How to Play** screen covering arcade and keyboard
   controls, the ghost cast, scoring, and what power pellets do.
 - Four campus-themed mazes-worth of original layouts (**The Cut**, **The
@@ -44,6 +47,8 @@ and name are not, and this project doesn't reproduce them.
 ![Frightened and eaten ghosts, plus a Skibo-themed bonus fruit](docs/screenshots/gameplay_02.png)
 
 ![Game over screen returning to the menu, not quitting](docs/screenshots/game_over_screen.png)
+
+![Attract-mode demo: a self-playing Scotty and the real ghost AI, mid-run](docs/screenshots/attract_demo.png)
 
 ## Controls
 
@@ -109,6 +114,41 @@ physical signal, not against what it currently does) for how that's
 guarded, on top of the same startup input-residue protection described
 below. No reachable state can trap a visitor: repeated back presses
 from anywhere always reach process exit in at most two presses.
+
+## Attract mode
+
+After `config.DEMO_IDLE_SECONDS` (15s, matched to the cabinet's other
+games) of no genuine input on the main menu, PacDawg drops into a
+self-playing demo rather than sitting on a static screen -- the real
+maze, the real ghost AI (scatter/chase, Cruise Elroy, ghost-house
+release, frightened, the works), and a demo Scotty steered by a
+deliberately simple controller (`pacdawg.demo_ai`): seek the nearest
+pellet, steer away from any ghost that's gotten close. It reuses
+`Game`'s actual per-frame systems -- the same pellet/fruit/collision
+handling real play uses -- rather than a separate faked-up simulation,
+so the demo can never drift out of sync with the real game. A small
+pulsing "DEMO" tag and the PACDAWG title overlay the HUD so it's
+unmistakably a demo, not a stuck game, and the high score keeps
+showing throughout.
+
+**Any genuine input** -- a button, a key, or stick movement past the
+configured deadzone -- ends the demo immediately and returns to the
+main menu; a drifting/noisy stick at rest does not count, so a dirty
+cabinet stick can't prevent attract mode from ever starting. The idle
+timer re-arms every time the menu is (re)entered, from anywhere,
+including right after a demo ends. P1/Esc/B/Backspace behave exactly
+as they do from gameplay: one level back, to the menu -- the same
+"back one level" contract described above, since the demo counts as
+one level below the menu, same as a game in progress.
+
+The demo cannot touch real game state. `Game._enter_demo()` saves the
+real `ScoreBoard` aside untouched and swaps in a disposable one (seeded
+with the same high score, purely for display) that is never committed
+-- so the demo can never write the real high score -- and restores the
+real one exactly as it was the moment the demo ends. If the demo
+Scotty is caught, or the demo maze is somehow cleared, the demo simply
+restarts from a fresh level rather than draining lives into a
+game-over or advancing forever, so a long-running demo stays bounded.
 
 ## Running locally
 
@@ -237,6 +277,7 @@ pacdawg/
   entities.py            Scotty + tile-aligned movement, tunnels
   ghosts.py              four personalities + scatter/chase/frightened machine
   game.py                state machine: menu -> how to play -> ready -> play -> death -> ...
+  demo_ai.py             the attract-mode demo's simple self-playing controller
   score.py               scoring, lives, extra life, high-score persistence
   input.py               joystick + keyboard intent resolution
   assets.py              the single point of PNG access (see assets/README.md)
