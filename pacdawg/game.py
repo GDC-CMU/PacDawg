@@ -94,7 +94,6 @@ class Game:
         self.menu_index = 0
         self._menu_last_direction: Optional[Direction] = None
         self._menu_last_confirm = False
-        self._menu_last_back = False
 
         # pygame handles, created lazily by run()/init_display()
         self.screen = None
@@ -105,18 +104,17 @@ class Game:
 
         # Startup input-residue guard (see config.INPUT_SETTLE_SECONDS):
         # the gallery may hand us a still-held select button, so confirm
-        # is ignored for a short settle window. P1 and Esc each have
-        # their own independent "armed" latch (see maybe_exit()) that is
-        # true whenever the corresponding raw input is currently *not*
-        # held, and only lets an exit fire while armed -- so a button
-        # already held (at startup, or carried over from a screen where
-        # it meant something else, like Esc on HOW TO PLAY) must be seen
-        # released at least once before it can trigger an exit. Both
-        # default to "clean start" here; init_display() re-derives them
-        # from real hardware state.
+        # is ignored for a short settle window. The single "go back"
+        # action (P1/Esc/B/Backspace -- see maybe_go_back()) has its own
+        # "armed" latch that is true whenever none of those four are
+        # currently held, and only lets a back-navigation fire while
+        # armed -- so a control already held (at startup, or carried over
+        # from a screen it just navigated away from) must be seen
+        # released at least once before it can trigger another level
+        # change. Defaults to "clean start" here; init_display()
+        # re-derives it from real hardware state.
         self._input_settle_remaining = 0.0
-        self._p1_exit_armed = True
-        self._esc_exit_armed = True
+        self._back_armed = True
 
     # -- setup helpers --------------------------------------------------------
     @staticmethod
@@ -179,9 +177,7 @@ class Game:
             return
 
         if self.state is GameState.HOW_TO_PLAY:
-            back = self._menu_back_pressed(raw)
-            confirm = self._menu_confirm_pressed(raw)  # also allowed, friendlier
-            if back or confirm:
+            if self._menu_confirm_pressed(raw):  # also allowed, friendlier than back-only
                 self.state = GameState.ATTRACT
             return
 
@@ -260,19 +256,6 @@ class Game:
         settling = self._input_settle_remaining > 0.0
         pressed = current and not self._menu_last_confirm and not settling
         self._menu_last_confirm = current
-        return pressed
-
-    def _menu_back_pressed(self, raw: RawInput) -> bool:
-        """Edge-triggered "cancel/back" (Esc, Backspace, or button B) --
-        currently only meaningful on HOW TO PLAY, where it returns to the
-        menu without exiting the game (P1 still does that; see
-        maybe_exit()). Same edge-triggering and startup-settle guard as
-        confirm, so a held back control can't chain two screen
-        transitions in consecutive frames."""
-        current = input_mod.wants_back(raw)
-        settling = self._input_settle_remaining > 0.0
-        pressed = current and not self._menu_last_back and not settling
-        self._menu_last_back = current
         return pressed
 
     def _activate_menu_item(self) -> None:
@@ -477,52 +460,70 @@ class Game:
         self.state = GameState.DYING
         self.state_timer = DYING_SECONDS
 
-    # -- exit contract ------------------------------------------------------------
-    def maybe_exit(self, raw: RawInput) -> None:
-        """P1 (button 5) must exit immediately, from any state -- that
-        part of the contract never changes. Esc is normally a second way
-        to trigger the same exit, EXCEPT on HOW_TO_PLAY, where Esc has
-        been repurposed to mean "go back to the menu" instead (see
-        update()/_menu_back_pressed()); on that one screen only P1
-        exits, so a visitor pressing Esc there is never surprised by an
-        unexpected quit.
+    # -- back-one-level contract ---------------------------------------------------
+    def maybe_go_back(self, raw: RawInput) -> None:
+        """P1, Esc, Backspace, and button B are all equivalent aliases of
+        a single "go back one level" action (this club's cross-game
+        arcade contract), used identically from *every* state:
 
-        P1 and Esc are each guarded by their own independent "armed"
-        latch, tracked continuously against the raw physical signal --
-        *not* against whatever it currently means -- so it disarms every
-        frame it's held and re-arms every frame it's released,
-        regardless of state. Whether an exit actually fires only
-        consults the armed value from *before* this frame's update, so
-        the latch still disarms even on a frame where the current state
-        doesn't treat that signal as "exit" (e.g. Esc while on
-        HOW_TO_PLAY). That one mechanism handles two distinct residue
-        problems: (1) a button already held over from process startup
-        (see init_display()) can't cause an instant unwanted exit, and
-        (2) a held Esc carried from HOW_TO_PLAY into a state where Esc
-        means "exit" can't chain straight into a second, unintended exit
-        -- it must be seen released and pressed again first. Once
-        armed, a genuine press-and-hold exits without any delay, exactly
-        per the documented contract.
+        - From the main menu (ATTRACT), back means exit to the gallery
+          (``sys.exit(0)``) -- there is nothing above the menu to go
+          back to, so this is still the launcher's documented top-level
+          quit path.
+        - From every other state -- HOW_TO_PLAY, or any state of a game
+          in progress (READY/PLAYING/DYING/LEVEL_CLEAR/GAME_OVER) --
+          back returns to the main menu, treating a game in progress as
+          abandoned (see _return_to_menu_abandoning_game()).
+
+        So leaving mid-game takes two presses: once back to the menu,
+        once more to exit. That is deliberate -- it makes an accidental
+        press recoverable instead of instantly dumping a visitor out.
+
+        Edge-triggered with a single armed/disarmed latch tracked
+        against the raw physical signal (not against what it currently
+        does): it disarms every frame any of the four controls is held
+        and re-arms the instant none of them are, regardless of state.
+        That one mechanism guards two residue problems: (1) a control
+        already held over from process startup (see init_display())
+        can't cause an instant unwanted level change, and (2) holding
+        the same physical control through a state transition (e.g.
+        gameplay -> menu) can't chain straight through a *second*
+        transition (menu -> exit) in the same hold -- it must be seen
+        released and pressed again. This matters more now than it used
+        to: a chained double-transition here would take a visitor from
+        gameplay straight out of the game, which is exactly what the
+        two-press design exists to prevent.
         """
-        p1_active = input_mod.wants_p1_exit(raw)
-        esc_active = input_mod.wants_escape_key(raw)
+        active = input_mod.wants_go_back(raw)
+        was_armed = self._back_armed
+        self._back_armed = not active
 
-        p1_was_armed = self._p1_exit_armed
-        esc_was_armed = self._esc_exit_armed
-        self._p1_exit_armed = not p1_active
-        self._esc_exit_armed = not esc_active
+        if not (active and was_armed):
+            return
 
-        if self.state is GameState.HOW_TO_PLAY:
-            should_exit = p1_active and p1_was_armed
-        else:
-            should_exit = (p1_active and p1_was_armed) or (esc_active and esc_was_armed)
-
-        if should_exit:
+        if self.state is GameState.ATTRACT:
             self._exit_to_gallery()
+        else:
+            self._return_to_menu_abandoning_game()
+
+    def _return_to_menu_abandoning_game(self) -> None:
+        """Shared "go back to the main menu" landing spot for every
+        non-ATTRACT state: a game in progress (if any) is treated as
+        abandoned rather than paused -- the high score is committed
+        (harmless no-op if it isn't a new one) so nothing earned is
+        lost, and the menu comes up cleanly. new_game() always fully
+        reinitializes score/level/ghosts from scratch, so START GAME
+        after this is guaranteed to be a genuinely fresh run; nothing
+        about the abandoned game leaks forward."""
+        self.score.commit_high_score()
+        self.state = GameState.ATTRACT
+        self.menu_index = 0
 
     def _exit_to_gallery(self) -> None:
-        """Shared by the P1/Esc contract and the menu's EXIT TO GALLERY
-        entry: commit the high score, then quit exactly like P1 does."""
+        """The top-level exit path: back from the main menu, or the
+        menu's EXIT TO GALLERY entry. Commits the high score, then quits
+        via sys.exit(0) -- the documented contract the launcher relies
+        on to reclaim control."""
         self.score.commit_high_score()
         try:
             pygame.quit()
@@ -588,9 +589,7 @@ class Game:
         )
         self._menu_last_confirm = input_mod.wants_confirm(seeded)
         self._menu_last_direction = input_mod.resolve_direction(seeded)
-        self._menu_last_back = input_mod.wants_back(seeded)
-        self._p1_exit_armed = not input_mod.wants_p1_exit(seeded)
-        self._esc_exit_armed = not input_mod.wants_escape_key(seeded)
+        self._back_armed = not input_mod.wants_go_back(seeded)
         self._input_settle_remaining = config.INPUT_SETTLE_SECONDS
 
     def _read_axes(self) -> tuple:
@@ -644,7 +643,7 @@ class Game:
         self.init_display()
         while True:
             raw = self.poll_hardware()
-            self.maybe_exit(raw)
+            self.maybe_go_back(raw)
             dt = self.clock.tick(config.FPS) / 1000.0
             dt = min(dt, 0.25)  # guard against huge stalls tunneling actors through walls
             self.update(dt, raw)

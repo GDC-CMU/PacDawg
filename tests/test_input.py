@@ -75,13 +75,17 @@ class ConfirmExitTests(unittest.TestCase):
         self.assertTrue(input_mod.wants_confirm(RawInput(pressed_buttons=frozenset({config.BUTTON_A}))))
         self.assertTrue(input_mod.wants_confirm(RawInput(pressed_buttons=frozenset({config.BUTTON_START}))))
 
-    def test_exit_via_escape_or_p1(self):
-        self.assertTrue(input_mod.wants_exit(RawInput(pressed_keys=frozenset({"escape"}))))
-        self.assertTrue(input_mod.wants_exit(RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))))
+    def test_go_back_via_keyboard_or_arcade_buttons(self):
+        # P1, Esc, Backspace, and button B are all equivalent aliases of
+        # the single "go back one level" action.
+        self.assertTrue(input_mod.wants_go_back(RawInput(pressed_keys=frozenset({"escape"}))))
+        self.assertTrue(input_mod.wants_go_back(RawInput(pressed_keys=frozenset({"backspace"}))))
+        self.assertTrue(input_mod.wants_go_back(RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))))
+        self.assertTrue(input_mod.wants_go_back(RawInput(pressed_buttons=frozenset({config.BUTTON_B}))))
 
-    def test_no_false_positive_exit(self):
+    def test_no_false_positive_go_back(self):
         raw = RawInput(pressed_keys=frozenset({"a"}), pressed_buttons=frozenset({config.BUTTON_A}))
-        self.assertFalse(input_mod.wants_exit(raw))
+        self.assertFalse(input_mod.wants_go_back(raw))
 
 
 if __name__ == "__main__":

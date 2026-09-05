@@ -1,8 +1,10 @@
 """Tests for the hard arcade-cabinet contract with ArcadeLauncher.
 
 - The display must be exactly 800x600.
-- Button 5 (P1) or Esc must exit immediately, from any game state, via
-  ``sys.exit(0)``.
+- P1 (button 5), Esc, Backspace, and button B are all aliases of a
+  single "go back one level" action, per this club's cross-game arcade
+  contract: from the main menu it exits via ``sys.exit(0)``; from every
+  other state it returns to the main menu.
 - The game must survive hundreds of simulated frames without crashing,
   including full runs through every input direction and state.
 """
@@ -33,40 +35,92 @@ class DisplayContractTests(unittest.TestCase):
         self.assertEqual(screen.get_size(), (800, 600))
 
 
-class ExitContractTests(unittest.TestCase):
-    def test_p1_button_exits_with_code_zero_from_every_state(self):
-        for state in GameState:
-            with self.subTest(state=state):
-                game = Game(rng=random.Random(0))
-                game.state = state
-                raw = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
-                with self.assertRaises(SystemExit) as cm:
-                    game.maybe_exit(raw)
-                self.assertEqual(cm.exception.code, 0)
+class BackOneLevelContractTests(unittest.TestCase):
+    """P1/Esc/Backspace/B are equivalent everywhere: from the main menu
+    they exit to the gallery; from every other state they return to the
+    main menu (never straight out of the process). No reachable state
+    may leave a visitor stuck -- repeated presses always eventually
+    reach process exit."""
 
-    def test_escape_key_also_exits_with_code_zero(self):
+    def test_p1_from_the_main_menu_exits_with_code_zero(self):
         game = Game(rng=random.Random(0))
-        raw = RawInput(pressed_keys=frozenset({"escape"}))
+        self.assertEqual(game.state, GameState.ATTRACT)
+        raw = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
         with self.assertRaises(SystemExit) as cm:
-            game.maybe_exit(raw)
+            game.maybe_go_back(raw)
         self.assertEqual(cm.exception.code, 0)
 
-    def test_no_exit_without_the_exit_input(self):
+    def test_p1_from_every_other_state_returns_to_the_menu_not_exit(self):
+        raw = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
+        for state in GameState:
+            if state is GameState.ATTRACT:
+                continue
+            with self.subTest(state=state):
+                game = Game(rng=random.Random(0))
+                game.new_game()
+                game.state = state
+                try:
+                    game.maybe_go_back(raw)
+                except SystemExit:
+                    self.fail(f"P1 exited the process directly from {state}")
+                self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_escape_key_mirrors_p1_exactly(self):
+        raw = RawInput(pressed_keys=frozenset({"escape"}))
+        game = Game(rng=random.Random(0))
+        with self.assertRaises(SystemExit) as cm:
+            game.maybe_go_back(raw)
+        self.assertEqual(cm.exception.code, 0)
+
+        game2 = Game(rng=random.Random(0))
+        game2.new_game()
+        game2.state = GameState.PLAYING
+        try:
+            game2.maybe_go_back(raw)
+        except SystemExit:
+            self.fail("Esc exited the process directly from PLAYING")
+        self.assertEqual(game2.state, GameState.ATTRACT)
+
+    def test_no_go_back_without_a_back_input(self):
         game = Game(rng=random.Random(0))
         raw = RawInput(pressed_buttons=frozenset({config.BUTTON_A}))
         try:
-            game.maybe_exit(raw)
+            game.maybe_go_back(raw)
         except SystemExit:
-            self.fail("maybe_exit() exited without an exit input present")
+            self.fail("maybe_go_back() exited without a back input present")
+        self.assertEqual(game.state, GameState.ATTRACT)
 
-    def test_either_button_5_from_a_second_stick_still_exits(self):
+    def test_either_button_5_from_a_second_stick_still_works(self):
         # Two identical DragonRise sticks are on the cabinet; button
         # indices are per-event, not per-device, so this is really just
         # confirming index 5 alone is sufficient regardless of source.
         game = Game(rng=random.Random(0))
         raw = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
         with self.assertRaises(SystemExit):
-            game.maybe_exit(raw)
+            game.maybe_go_back(raw)
+
+    def test_from_any_state_repeated_p1_presses_eventually_exit(self):
+        # Property test: no reachable state can trap a visitor. Two
+        # presses (with a release between, so each is a fresh edge)
+        # suffice from anywhere, since the deepest the state machine
+        # goes is one level below the menu.
+        press = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
+        release = RawInput()
+        for state in GameState:
+            with self.subTest(state=state):
+                game = Game(rng=random.Random(0))
+                game.new_game()
+                game.state = state
+                exited = False
+                for _ in range(4):
+                    try:
+                        game.maybe_go_back(press)
+                    except SystemExit as exc:
+                        self.assertEqual(exc.code, 0)
+                        exited = True
+                        break
+                    game.maybe_go_back(release)
+                self.assertTrue(exited, f"P1 never reached process exit from {state}")
 
 
 class HeadlessStabilityTests(unittest.TestCase):

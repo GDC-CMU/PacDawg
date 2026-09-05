@@ -27,12 +27,12 @@ KEY_DIRECTIONS = {
 }
 
 CONFIRM_KEYS = frozenset({"return", "enter", "space"})
-EXIT_KEYS = frozenset({"escape"})
-# "Cancel/back" -- Esc and Backspace on the keyboard, button B (0) on the
-# cabinet. Distinct from EXIT_KEYS/EXIT_BUTTONS: on most screens Esc
-# means "exit", but on HOW TO PLAY it means "go back to the menu"
-# instead (see Game.maybe_exit / Game._update_how_to_play), so the two
-# concepts are resolved separately here rather than conflated.
+# "Go back one level" -- Esc and Backspace on the keyboard, or button P1
+# (5)/B (0) on the cabinet. All four are equivalent aliases of a single
+# action (see Game.maybe_go_back()): from the main menu it exits to the
+# gallery; from anywhere else it returns to the main menu. There is no
+# separate "exit" concept any more -- P1 no longer means "quit
+# immediately from anywhere", it means "go back", exactly like Esc.
 BACK_KEYS = frozenset({"escape", "backspace"})
 
 
@@ -89,38 +89,12 @@ def wants_confirm(raw: RawInput) -> bool:
     return bool(raw.pressed_buttons & set(config.CONFIRM_BUTTONS))
 
 
-def wants_back(raw: RawInput) -> bool:
-    """"Cancel/back" intent: Esc, Backspace, or button B (0). Used by
-    screens (like HOW TO PLAY) that need a way to return without exiting
-    the game outright -- see wants_p1_exit()/wants_exit() for the exit
-    contract, which is intentionally a separate concept."""
+def wants_go_back(raw: RawInput) -> bool:
+    """The single "go back one level" intent: Esc, Backspace, button P1
+    (5), or button B (0). All four are exactly equivalent everywhere in
+    the game -- see Game.maybe_go_back() for what "back" resolves to on
+    each screen (main menu -> exit to the gallery; anywhere else ->
+    main menu)."""
     if raw.pressed_keys & BACK_KEYS:
         return True
-    return bool(raw.pressed_buttons & set(config.BACK_BUTTONS))
-
-
-def wants_p1_exit(raw: RawInput) -> bool:
-    """True only for the literal P1 button (5) -- the one exit path that
-    must work identically from *every* state, including screens (like
-    HOW TO PLAY) where Esc has been repurposed to mean "back" instead of
-    "exit". Unlike wants_exit(), this deliberately ignores Esc."""
-    return bool(raw.pressed_buttons & set(config.EXIT_BUTTONS))
-
-
-def wants_escape_key(raw: RawInput) -> bool:
-    """True iff the literal Esc key is physically held, independent of
-    whatever it currently *means* (exit, on most screens; back, on HOW
-    TO PLAY). Game.maybe_exit() tracks this separately from P1 so a
-    single held Esc can't chain two meanings across a state transition
-    -- e.g. pressing Esc to leave HOW TO PLAY must not also be read as a
-    fresh Esc-means-exit press the instant the menu appears."""
-    return bool(raw.pressed_keys & EXIT_KEYS)
-
-
-def wants_exit(raw: RawInput) -> bool:
-    """True the instant P1 (button 5) or Esc is pressed, from any state
-    where Esc still means "exit" (i.e. everywhere except HOW TO PLAY --
-    see wants_p1_exit() for the subset used there)."""
-    if raw.pressed_keys & EXIT_KEYS:
-        return True
-    return bool(raw.pressed_buttons & set(config.EXIT_BUTTONS))
+    return bool(raw.pressed_buttons & (set(config.EXIT_BUTTONS) | set(config.BACK_BUTTONS)))

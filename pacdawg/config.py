@@ -191,17 +191,17 @@ BUTTON_A = 1
 BUTTON_X = 2
 BUTTON_Y = 3
 BUTTON_COIN = 4
-BUTTON_P1 = 5  # must exit the game immediately, from any state
+BUTTON_P1 = 5  # "go back one level" (main menu -> exit; anywhere else -> main menu), per the club's cross-game arcade contract
 BUTTON_SELECT = 8
 BUTTON_START = 9
 
 CONFIRM_BUTTONS = (BUTTON_A, BUTTON_START)
+# The single "go back one level" action is aliased across two buttons on
+# the cabinet: P1 (5, the club's cross-game back/exit button) and B (0,
+# the natural back partner to A/1 in this cabinet's layout). They are
+# fully equivalent everywhere -- see input.wants_go_back() and
+# Game.maybe_go_back().
 EXIT_BUTTONS = (BUTTON_P1,)
-# "Cancel/back" -- button B (0) is the natural back partner to A (1) on
-# this cabinet's layout. Used by screens that need to go back rather
-# than exit outright (currently just HOW TO PLAY -> menu); deliberately
-# distinct from EXIT_BUTTONS so P1 always means "leave the game" and
-# never gets reinterpreted as a mere "back".
 BACK_BUTTONS = (BUTTON_B,)
 
 JOYSTICK_AXIS_X = 0

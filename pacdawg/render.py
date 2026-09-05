@@ -158,10 +158,12 @@ def _draw_menu_item(screen, font, text, color, y: int, selected: bool) -> None:
 def _draw_attract_screen(screen, game: Game, total_time: float) -> None:
     """The main menu, shown on launch and again after every game over.
 
-    This is the only place visitors are told P1 exits to the launcher's
-    gallery -- the gallery itself no longer says so -- so it has to be
-    unmissable, alongside a clear, navigable set of choices rather than
-    a single "press start" splash.
+    P1 (or Esc/Backspace/button B -- all equivalent "go back" aliases)
+    exits to the launcher's gallery from here, since the menu is the top
+    level with nothing above it to go back to. This is the only place
+    that says so -- the gallery itself no longer does -- so it has to
+    be unmissable, alongside a clear, navigable set of choices rather
+    than a single "press start" splash.
     """
     huge = _font(56)
     big = _font(26)
@@ -205,15 +207,15 @@ def _draw_attract_screen(screen, game: Game, total_time: float) -> None:
     _center_text_at(screen, tiny, "UP/DOWN TO CHOOSE - A/START/ENTER TO SELECT", nav_color, 500)
 
     _center_text_at(screen, small, "PRESS P1 TO EXIT TO THE GALLERY", HUD_ACCENT_COLOR, 540)
-    _center_text_at(screen, tiny, "(ESC ON KEYBOARD)", HUD_DIM_COLOR, 562)
+    _center_text_at(screen, tiny, "(OR ESC / BACKSPACE / BUTTON B)", HUD_DIM_COLOR, 562)
 
 
 def _draw_how_to_play_screen(screen, game: Game) -> None:
     """A real instructions screen: controls, the ghost cast, scoring, and
-    what power pellets do. Reached from the main menu. B/Esc/Backspace
-    (or A/Start/Enter/Space) go back to the menu; P1 always exits to the
-    gallery -- deliberately different controls, since Esc means "back"
-    on this one screen rather than "exit" (see Game.maybe_exit)."""
+    what power pellets do. Reached from the main menu. P1, button B, Esc,
+    and Backspace are all equivalent "go back one level" aliases (see
+    Game.maybe_go_back()) and return here to the menu; A/Start/Enter/
+    Space also work, for anyone who prefers confirm."""
     big = _font(34)
     small = _font(19)
     label = _font(20)
@@ -224,11 +226,10 @@ def _draw_how_to_play_screen(screen, game: Game) -> None:
     _center_text_at(screen, label, "CONTROLS", HUD_DIM_COLOR, 64)
     _center_text_at(screen, small, "JOYSTICK (EITHER STICK) OR ARROWS/WASD  --  MOVE", HUD_TEXT_COLOR, 87)
     _center_text_at(screen, small, "BUTTON A OR START, OR ENTER/SPACE  --  CONFIRM", HUD_TEXT_COLOR, 108)
-    _center_text_at(screen, small, "BUTTON B, OR ESC/BACKSPACE  --  BACK", HUD_TEXT_COLOR, 129)
-    _center_text_at(screen, small, "BUTTON P1  --  EXIT ANYTIME", HUD_ACCENT_COLOR, 150)
+    _center_text_at(screen, small, "BUTTON P1 OR B, OR ESC/BACKSPACE  --  BACK ONE LEVEL", HUD_ACCENT_COLOR, 129)
 
-    _center_text_at(screen, label, "THE GHOSTS", HUD_DIM_COLOR, 182)
-    roster_top = 206
+    _center_text_at(screen, label, "THE GHOSTS", HUD_DIM_COLOR, 161)
+    roster_top = 185
     row_height = 30
     sprite_col_x = config.SCREEN_WIDTH // 2 - 190
     text_col_x = config.SCREEN_WIDTH // 2 - 150
@@ -243,23 +244,22 @@ def _draw_how_to_play_screen(screen, game: Game) -> None:
         desc_surface = tiny.render(GHOST_HOW_TO_PLAY_TEXT[name], True, HUD_TEXT_COLOR)
         screen.blit(desc_surface, (text_col_x + 110, row_y - 8))
 
-    _center_text_at(screen, label, "SCORING", HUD_DIM_COLOR, 330)
-    _center_text_at(screen, small, "PELLET 10 PTS  --  POWER PELLET 50 PTS", HUD_TEXT_COLOR, 352)
-    _center_text_at(screen, small, "GHOSTS EATEN IN A ROW: 200 / 400 / 800 / 1600", HUD_TEXT_COLOR, 372)
-    _center_text_at(screen, small, "EXTRA LIFE AT 10,000 POINTS", HUD_TEXT_COLOR, 392)
+    _center_text_at(screen, label, "SCORING", HUD_DIM_COLOR, 309)
+    _center_text_at(screen, small, "PELLET 10 PTS  --  POWER PELLET 50 PTS", HUD_TEXT_COLOR, 331)
+    _center_text_at(screen, small, "GHOSTS EATEN IN A ROW: 200 / 400 / 800 / 1600", HUD_TEXT_COLOR, 351)
+    _center_text_at(screen, small, "EXTRA LIFE AT 10,000 POINTS", HUD_TEXT_COLOR, 371)
 
-    _center_text_at(screen, label, "POWER PELLETS", HUD_DIM_COLOR, 424)
+    _center_text_at(screen, label, "POWER PELLETS", HUD_DIM_COLOR, 403)
     _center_text_at(
-        screen, small, "TURN THE GHOSTS BLUE AND EDIBLE FOR A SHORT TIME", HUD_TEXT_COLOR, 446
+        screen, small, "TURN THE GHOSTS BLUE AND EDIBLE FOR A SHORT TIME", HUD_TEXT_COLOR, 425
     )
 
-    # The prompt leads with "back" (the intuitive way to leave this
-    # screen) and calls out the exit control as a distinct, separate
-    # thing directly beneath it, so the two are never confused.
-    _draw_dim_panel(screen, 540, 80)
-    _center_text_at(screen, small, "B / ESC TO GO BACK", HUD_ACCENT_COLOR, 522)
-    _center_text_at(screen, tiny, "(A / START / ENTER ALSO GOES BACK)", HUD_DIM_COLOR, 542)
-    _center_text_at(screen, small, "P1 EXITS TO THE GALLERY", HUD_ACCENT_COLOR, 564)
+    # A single, unambiguous prompt: P1/B/Esc/Backspace are all "back",
+    # and there's no longer a separate "exit" control to distinguish it
+    # from -- so one clear line is all this needs.
+    _draw_dim_panel(screen, 540, 60)
+    _center_text_at(screen, small, "P1 / B / ESC TO GO BACK", HUD_ACCENT_COLOR, 528)
+    _center_text_at(screen, tiny, "(A / START / ENTER ALSO GOES BACK)", HUD_DIM_COLOR, 550)
 
 
 def _draw_dim_panel(screen, center_y: int, height: int) -> None:
@@ -291,6 +291,16 @@ def _draw_hud(screen, game: Game) -> None:
         x = 16 + i * (life_icon.get_width() + 6)
         y = config.SCREEN_HEIGHT - life_icon.get_height() - 4
         screen.blit(life_icon, (x, y))
+
+    # A quiet, unobtrusive reminder that P1 returns to the menu -- a
+    # visitor mid-game no longer has the title screen's legend on
+    # screen. Deliberately tiny and dim, tucked in an otherwise-unused
+    # corner: a hint, not a banner.
+    if game.state in (GameState.READY, GameState.PLAYING, GameState.DYING, GameState.LEVEL_CLEAR):
+        hint_font = _font(13)
+        hint_surface = hint_font.render("P1: MENU", True, HUD_DIM_COLOR)
+        hint_rect = hint_surface.get_rect(bottomright=(config.SCREEN_WIDTH - 12, config.SCREEN_HEIGHT - 6))
+        screen.blit(hint_surface, hint_rect)
 
     if game.state is GameState.READY:
         _draw_dim_panel(screen, config.SCREEN_HEIGHT // 2, 40)

@@ -53,8 +53,7 @@ and name are not, and this project doesn't reproduce them.
 |---|---|
 | Joystick (either connected stick), axis 0/1 | Steer Scotty / navigate the menu |
 | Button 1 (A) or Button 9 (Start) | Confirm / select the highlighted menu entry |
-| **Button 0 (B)** | **Back** -- return to the menu from HOW TO PLAY |
-| **Button 5 (P1)** | **Exit immediately**, from any screen, back to the launcher |
+| **Button 5 (P1) or Button 0 (B)** | **Back one level** -- main menu -> exit to the gallery; anywhere else -> main menu |
 
 The cabinet has two identical joystick devices; either one can steer.
 Hot-plugging (disconnecting/reconnecting a stick mid-game) is handled
@@ -65,13 +64,11 @@ real, navigable menu -- **Start Game**, **How to Play**, **Exit to
 Gallery** -- moved with axis 1 up/down (or arrows/WASD) and confirmed
 with A/Start/Enter/Space, with the selected entry given a solid,
 high-contrast highlight bar rather than a subtle tint so it reads from
-several feet away. It's also the one place that tells a visitor P1 exits
-back to the launcher's gallery, since the gallery itself doesn't say so.
-**Exit to Gallery** does exactly what P1 does. **How to Play** is a full
-screen covering controls, the ghost cast, scoring, and power pellets;
-button B (or Esc/Backspace on a keyboard, or confirm) returns to the
-menu -- see "Back vs. exit" below for why that screen treats Esc
-differently from everywhere else.
+several feet away. It's also the one place that tells a visitor P1
+exits to the launcher's gallery, since the gallery itself doesn't say
+so. **Exit to Gallery** does exactly what P1 does. **How to Play** is a
+full screen covering controls, the ghost cast, scoring, and power
+pellets; P1/B/Esc/Backspace (or confirm) return to the menu.
 
 ### Keyboard (development)
 
@@ -79,27 +76,39 @@ differently from everywhere else.
 |---|---|
 | Arrow keys or WASD | Steer Scotty / navigate the menu |
 | Enter / Space | Confirm / select |
-| Backspace | Back -- return to the menu from HOW TO PLAY |
-| Esc | Exit immediately (except on HOW TO PLAY, where it means Back) |
+| Esc or Backspace | Back one level -- same as P1/B on the cabinet |
 
-### Back vs. exit
+### P1 goes back one level, everywhere
 
-Confirm always means "forward" and P1 always means "leave the game" --
-neither of those ever changes. Esc is the one control whose meaning is
-context-dependent, and it's deliberately consistent with what a person
-would expect at each screen:
+This is a cross-game convention for the club's arcade cabinet, not a
+PacDawg-specific quirk: **P1 always means "go back one level," never
+"quit immediately."** Esc and Backspace on the keyboard, and button B
+(0) on the cabinet, are exactly equivalent aliases of that same single
+action -- all four controls do the same thing on every screen:
 
-- **HOW TO PLAY** -- Esc (or Backspace, or button B) goes **back** to
-  the menu. It does **not** exit; P1 is the only way to exit from here.
-- **Main menu, gameplay, game over** -- Esc exits to the gallery, same
-  as P1, since there's nothing to "go back" to from those screens.
+- **Main menu** -- back exits to the gallery (`sys.exit(0)`), since the
+  menu is the top level with nothing above it.
+- **Every other screen** -- HOW TO PLAY, or any state of a game in
+  progress -- back returns to the main menu. A game in progress is
+  treated as abandoned: the high score is committed so nothing earned
+  is lost, and starting again always begins a genuinely fresh game.
 
-A held Esc (or button B) can't chain two screen transitions in a row --
-e.g. holding it to leave HOW TO PLAY can't also be read as a fresh
-"Esc means exit" press the instant the menu appears. See
-`Game.maybe_exit()`'s per-signal armed/disarmed latch for how that's
+So leaving from mid-game takes two presses (back to the menu, then back
+again to exit) rather than one. That's deliberate: it makes an
+accidental press recoverable instead of instantly dumping a visitor out
+of the game. A visitor mid-game gets a small, quiet "P1: MENU" reminder
+tucked in the HUD's corner, since the title screen's legend is no
+longer on screen at that point.
+
+A held P1/Esc/B/Backspace can't chain two level changes in a row --
+e.g. holding it to leave gameplay can't also be read as a fresh press
+the instant the menu appears, which would otherwise dump a visitor
+straight out of the game on a single hold. See
+`Game.maybe_go_back()`'s armed/disarmed latch (tracked against the raw
+physical signal, not against what it currently does) for how that's
 guarded, on top of the same startup input-residue protection described
-below.
+below. No reachable state can trap a visitor: repeated back presses
+from anywhere always reach process exit in at most two presses.
 
 ## Running locally
 
@@ -134,8 +143,9 @@ layouts being rejected loudly), each ghost personality picking a
 different target from identical game state, the scatter/chase/frightened
 state machine, scoring and the ghost-eating combo, pellet accounting and
 level completion, asset fallback behavior, working-directory
-independence, and the arcade exit contract (800x600 display, P1 exits
-via `sys.exit(0)` from any state).
+independence, and the arcade back-one-level contract (800x600 display,
+P1/Esc/B/Backspace always reach process exit within two presses from
+any state).
 
 ## How it's deployed
 
@@ -147,9 +157,12 @@ and maze path is resolved from `__file__` rather than the current
 working directory -- the game has to work no matter where the launcher
 runs it from.
 
-Button 5 (P1) exits via `sys.exit(0)` immediately, from any state, which
-is the documented contract the launcher relies on to return the visitor
-to its gallery.
+P1 (and Esc/B/Backspace) always go back one level -- main menu exits
+via `sys.exit(0)`, everywhere else returns to the main menu -- per this
+club's cross-game arcade convention. That means the launcher's
+documented "reclaim control" path is still exactly `sys.exit(0)` from
+the main menu; it's just no longer one press away from every state, by
+design (see "P1 goes back one level, everywhere" above).
 
 The gallery is left with its own select button (button 1/A, or Enter)
 still physically held down -- that's how the visitor picked PacDawg --
@@ -160,10 +173,10 @@ hardware state, so an already-held control must be released once before
 it can register as a fresh press; a short settle window
 (`config.INPUT_SETTLE_SECONDS`) additionally ignores menu confirm for a
 moment at startup as a second layer of defense. None of this ever
-delays or suppresses the P1 exit path, which stays an immediate,
-level-triggered check -- it only guards against a P1 that happens to
-already be held at process start being misread as an instant, unwanted
-exit.
+delays or suppresses the back-one-level path, which stays an immediate,
+level-triggered check once armed -- it only guards against a control
+that happens to already be held at process start being misread as an
+instant, unwanted level change.
 
 ## Swapping in real art
 
