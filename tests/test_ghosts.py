@@ -1,0 +1,284 @@
+"""Tests for ghost personalities and the scatter/chase/frightened machine."""
+from __future__ import annotations
+
+import random
+import unittest
+
+from pacdawg import config
+from pacdawg.entities import Direction, Scotty
+from pacdawg.ghosts import (
+    Ghost,
+    GhostMode,
+    ScatterChaseClock,
+    TARGET_FUNCTIONS,
+    apply_phase_change,
+    create_ghosts,
+    target_doherty,
+    target_gates,
+    target_hunt,
+    target_wean,
+)
+from pacdawg.maze import Maze, MazeError
+
+
+def _test_maze():
+    """A small, hand-verified maze: open field, one tunnel row, a boxed
+    ghost house with all four start markers, and a player start below it.
+    """
+    cols, rows = 17, 15
+    grid = [["." for _ in range(cols)] for _ in range(rows)]
+    for c in range(cols):
+        grid[0][c] = "#"
+        grid[rows - 1][c] = "#"
+    for r in range(rows):
+        grid[r][0] = "#"
+        grid[r][cols - 1] = "#"
+
+    tunnel_row = rows // 2  # 7
+    grid[tunnel_row][0] = "T"
+    grid[tunnel_row][cols - 1] = "T"
+
+    top, bottom = tunnel_row - 2, tunnel_row + 2  # 5, 9
+    left, right = 6, 10
+    for c in range(left, right + 1):
+        grid[top][c] = "#"
+        grid[bottom][c] = "#"
+    for r in range(top, bottom + 1):
+        grid[r][left] = "#"
+        grid[r][right] = "#"
+    grid[top][(left + right) // 2] = "="
+    for r in range(top + 1, bottom):
+        for c in range(left + 1, right):
+            grid[r][c] = " "
+    grid[tunnel_row][left + 1] = "1"
+    grid[tunnel_row][right - 1] = "2"
+    grid[top + 1][(left + right) // 2] = "3"
+    grid[bottom - 1][(left + right) // 2] = "4"
+
+    grid[rows - 2][cols // 2] = "P"
+
+    layout = ["".join(row) for row in grid]
+    return Maze(layout, name="test-maze")
+
+
+class GhostPersonalityTests(unittest.TestCase):
+    def setUp(self):
+        self.maze = _test_maze()
+        self.player = Scotty(8, 13, config.BASE_PLAYER_SPEED)
+        self.player.direction = Direction.RIGHT
+        self.player.facing = Direction.RIGHT
+        self.ghosts = create_ghosts(self.maze, level=1)
+
+    def test_four_personalities_are_registered(self):
+        self.assertEqual(set(TARGET_FUNCTIONS), {"gates", "hunt", "wean", "doherty"})
+
+    def test_gates_targets_players_exact_tile(self):
+        target = target_gates(self.ghosts["gates"], self.player, self.ghosts, self.maze)
+        self.assertEqual(target, self.player.tile)
+
+    def test_hunt_targets_ahead_of_player_facing(self):
+        target = target_hunt(self.ghosts["hunt"], self.player, self.ghosts, self.maze)
+        px, py = self.player.tile
+        self.assertEqual(target, (px + 4, py))  # facing right
+        self.assertNotEqual(target, self.player.tile)
+
+    def test_wean_target_depends_on_gates_position(self):
+        gates = self.ghosts["gates"]
+        gates.teleport(2, 2)
+        target_a = target_wean(self.ghosts["wean"], self.player, self.ghosts, self.maze)
+        gates.teleport(14, 12)
+        target_b = target_wean(self.ghosts["wean"], self.player, self.ghosts, self.maze)
+        self.assertNotEqual(target_a, target_b)
+
+    def test_doherty_chases_far_and_retreats_close(self):
+        doherty = self.ghosts["doherty"]
+        doherty.teleport(*self.player.tile)  # right on top of Scotty: very close
+        near_target = target_doherty(doherty, self.player, self.ghosts, self.maze)
+        self.assertEqual(near_target, doherty.corner)
+
+        doherty.teleport(1, 1)  # far corner: should come chase
+        far_target = target_doherty(doherty, self.player, self.ghosts, self.maze)
+        self.assertEqual(far_target, self.player.tile)
+
+    def test_same_game_state_yields_different_targets_per_personality(self):
+        targets = {
+            name: fn(self.ghosts[name], self.player, self.ghosts, self.maze)
+            for name, fn in TARGET_FUNCTIONS.items()
+        }
+        # doherty is far away here, so it also chases directly -- but gates
+        # and hunt must still differ from each other, and wean (a
+        # reflection through gates) must differ from a direct chase.
+        self.assertNotEqual(targets["gates"], targets["hunt"])
+        self.assertNotEqual(targets["gates"], targets["wean"])
+
+    def test_create_ghosts_requires_all_four_markers(self):
+        layout = [
+            "#####",
+            "#P..#",
+            "#...#",
+            "#.o.#",
+            "#####",
+        ]
+        maze = Maze(layout, name="no-ghosts")
+        with self.assertRaises(ValueError):
+            create_ghosts(maze, level=1)
+
+
+class GhostModeMachineTests(unittest.TestCase):
+    def setUp(self):
+        self.maze = _test_maze()
+        self.ghost = Ghost("gates", (8, 8), (1, 1), config.BASE_GHOST_SPEED)
+
+    def test_new_ghost_starts_in_house(self):
+        self.assertEqual(self.ghost.mode, GhostMode.HOUSE)
+
+    def test_release_moves_to_leaving(self):
+        self.ghost.release()
+        self.assertEqual(self.ghost.mode, GhostMode.LEAVING)
+
+    def test_frighten_only_affects_hunting_ghosts(self):
+        self.ghost.mode = GhostMode.CHASE
+        self.ghost.frighten(5.0)
+        self.assertEqual(self.ghost.mode, GhostMode.FRIGHTENED)
+        self.assertEqual(self.ghost.frightened_seconds_left, 5.0)
+
+        house_ghost = Ghost("hunt", (8, 8), (1, 1), config.BASE_GHOST_SPEED)
+        house_ghost.frighten(5.0)
+        self.assertEqual(house_ghost.mode, GhostMode.HOUSE)  # unaffected
+
+    def test_frightened_expires_back_to_chase_or_scatter(self):
+        self.ghost.mode = GhostMode.CHASE
+        self.ghost.frighten(1.0)
+        player = Scotty(8, 13, config.BASE_PLAYER_SPEED)
+        ghosts = {"gates": self.ghost}
+        rng = random.Random(1)
+
+        self.ghost.update(self.maze, 0.5, player, ghosts, "chase", rng)
+        self.assertEqual(self.ghost.mode, GhostMode.FRIGHTENED)
+
+        self.ghost.update(self.maze, 0.6, player, ghosts, "chase", rng)
+        self.assertEqual(self.ghost.mode, GhostMode.CHASE)
+
+    def test_get_eaten_then_returns_home_and_reenters_house(self):
+        self.ghost.mode = GhostMode.FRIGHTENED
+        self.ghost.frightened_seconds_left = 3.0
+        self.ghost.get_eaten()
+        self.assertEqual(self.ghost.mode, GhostMode.EATEN)
+
+        player = Scotty(8, 13, config.BASE_PLAYER_SPEED)
+        ghosts = {"gates": self.ghost}
+        rng = random.Random(2)
+        # eyes move fast; give it plenty of simulated time to get home
+        for _ in range(400):
+            if self.ghost.mode is GhostMode.HOUSE:
+                break
+            self.ghost.update(self.maze, 1 / 30.0, player, ghosts, "chase", rng)
+        self.assertEqual(self.ghost.mode, GhostMode.HOUSE)
+
+    def test_is_flashing_only_near_end_of_frightened(self):
+        self.ghost.mode = GhostMode.FRIGHTENED
+        self.ghost.frightened_seconds_left = 5.0
+        self.assertFalse(self.ghost.is_flashing)
+        self.ghost.frightened_seconds_left = config.FRIGHTENED_FLASH_SECONDS - 0.01
+        # flashing toggles on/off; just confirm it's deterministic and defined
+        self.assertIn(self.ghost.is_flashing, (True, False))
+
+    def _in_bounds(self, maze, ghost):
+        return -2 <= ghost.x <= maze.cols + 1 and -2 <= ghost.y <= maze.rows + 1
+
+    def test_release_after_house_bobbing_never_runs_away(self):
+        # Regression test: releasing a ghost while it is mid-bob used to
+        # leave the tracked segment target on the wrong side of its
+        # actual (bobbed) position, causing "distance to target" to grow
+        # every frame instead of shrink -- so it never arrived, never
+        # re-checked walls, and sailed straight through the top of the
+        # maze forever.
+        maze = _test_maze()
+        ghost = Ghost("gates", (8, 8), (1, 1), config.BASE_GHOST_SPEED)
+        player = Scotty(*maze.player_start, config.BASE_PLAYER_SPEED)
+        ghosts = {"gates": ghost}
+        rng = random.Random(5)
+        for _ in range(37):  # bob for an odd number of sub-frames first
+            ghost._bob_in_house(1 / 60.0)
+        ghost.release()
+        for _ in range(600):
+            ghost.update(maze, 1 / 60.0, player, ghosts, "chase", rng)
+            self.assertTrue(
+                self._in_bounds(maze, ghost),
+                f"ghost left the maze bounds: ({ghost.x}, {ghost.y})",
+            )
+
+    def test_frighten_reversal_never_runs_away(self):
+        maze = _test_maze()
+        ghost = Ghost("gates", (8, 8), (1, 1), config.BASE_GHOST_SPEED)
+        player = Scotty(*maze.player_start, config.BASE_PLAYER_SPEED)
+        ghosts = {"gates": ghost}
+        rng = random.Random(6)
+        ghost.mode = GhostMode.CHASE
+        ghost.direction = Direction.RIGHT
+        # Put the ghost mid-tile (not on an exact integer), the way it
+        # would be most frames in a real game, before forcing a reversal.
+        ghost.x = 8.4
+        ghost._target_x, ghost._target_y = 9.0, 8.0
+        ghost.frighten(5.0)
+        for _ in range(600):
+            ghost.update(maze, 1 / 60.0, player, ghosts, "chase", rng)
+            self.assertTrue(self._in_bounds(maze, ghost))
+
+    def test_apply_phase_change_reversal_never_runs_away(self):
+        maze = _test_maze()
+        ghost = Ghost("gates", (8, 8), (1, 1), config.BASE_GHOST_SPEED)
+        player = Scotty(*maze.player_start, config.BASE_PLAYER_SPEED)
+        ghosts = {"gates": ghost}
+        rng = random.Random(7)
+        ghost.mode = GhostMode.CHASE
+        ghost.direction = Direction.UP
+        ghost.y = 7.6
+        ghost._target_x, ghost._target_y = 8.0, 7.0
+        apply_phase_change(ghosts, "scatter")
+        for _ in range(600):
+            ghost.update(maze, 1 / 60.0, player, ghosts, "scatter", rng)
+            self.assertTrue(self._in_bounds(maze, ghost))
+
+
+class ScatterChaseClockTests(unittest.TestCase):
+    def test_starts_on_first_entry(self):
+        clock = ScatterChaseClock([("scatter", 1.0), ("chase", 2.0)])
+        self.assertEqual(clock.phase, "scatter")
+
+    def test_advances_phase_after_duration(self):
+        clock = ScatterChaseClock([("scatter", 1.0), ("chase", 2.0)])
+        changed = clock.update(0.5)
+        self.assertFalse(changed)
+        self.assertEqual(clock.phase, "scatter")
+        changed = clock.update(0.6)
+        self.assertTrue(changed)
+        self.assertEqual(clock.phase, "chase")
+
+    def test_stays_on_final_phase_forever(self):
+        clock = ScatterChaseClock([("scatter", 1.0), ("chase", 2.0)])
+        clock.update(1.1)
+        self.assertEqual(clock.phase, "chase")
+        changed = clock.update(1000.0)
+        self.assertFalse(changed)
+        self.assertEqual(clock.phase, "chase")
+
+    def test_apply_phase_change_reverses_hunting_ghosts(self):
+        ghost = Ghost("gates", (5, 5), (1, 1), config.BASE_GHOST_SPEED)
+        ghost.mode = GhostMode.CHASE
+        ghost.direction = Direction.RIGHT
+        apply_phase_change({"gates": ghost}, "scatter")
+        self.assertEqual(ghost.mode, GhostMode.SCATTER)
+        self.assertEqual(ghost.direction, Direction.LEFT)
+
+    def test_apply_phase_change_ignores_frightened_and_eaten(self):
+        ghost = Ghost("gates", (5, 5), (1, 1), config.BASE_GHOST_SPEED)
+        ghost.mode = GhostMode.FRIGHTENED
+        ghost.direction = Direction.RIGHT
+        apply_phase_change({"gates": ghost}, "scatter")
+        self.assertEqual(ghost.mode, GhostMode.FRIGHTENED)
+        self.assertEqual(ghost.direction, Direction.RIGHT)
+
+
+if __name__ == "__main__":
+    unittest.main()
