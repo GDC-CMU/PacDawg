@@ -52,6 +52,24 @@ Scotty is a small, shaggy Scottish Terrier: **CMU's mascot**, not a
 yellow circle. He has two animation frames per facing direction (a
 simple "legs/mouth" alternation used for the walk animation):
 
+**Contrast is not optional.** The maze field is black -- correctly, to
+match the arcade genre -- which means Scotty has to carry all of the
+contrast himself, since nothing behind him will help. On the cabinet,
+viewed from a few feet under fair lighting, Scotty must read as **the
+single most legible sprite on screen**, more so than any ghost. The
+committed placeholder is a warm cream/tan ("wheaten") coat for exactly
+this reason: a traditional solid-black Scottie photographed or drawn
+straight became a dark blob nearly invisible against the black field.
+When supplying real art:
+
+- Keep Scotty light/bright enough (or give him a strong bright rim
+  light/outline if he must stay dark) that he's still the most readable
+  actor on screen next to all four ghost colors and the black field.
+- Keep his **silhouette** distinct from a ghost's round-domed shape --
+  visible ears and a snout/head profile, not just a different color --
+  so the two remain distinguishable at a glance, not just on close
+  inspection.
+
 | Files | Size | Used for |
 |---|---|---|
 | `scotty_up_1.png`, `scotty_up_2.png` | 20x20 | Facing up |

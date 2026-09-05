@@ -38,7 +38,6 @@ HUNT_COLOR = (255, 128, 200)    # Hunt: pink, ambusher
 WEAN_COLOR = (64, 200, 220)     # Wean: cyan, flanker
 DOHERTY_COLOR = (240, 150, 60)  # Doherty: orange, shy
 
-DIRECTION_ANGLES = {"right": 0, "up": -90, "left": 180, "down": 90}
 DIRECTION_VECTORS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
 
@@ -54,63 +53,91 @@ def make_scotty(size, direction, frame):
     surf = _surface(size)
     cx, cy = w / 2.0, h / 2.0
     radius = min(w, h) / 2.0 - 1.5
+    fx, fy = DIRECTION_VECTORS[direction]
+    perp_x, perp_y = -fy, fx  # 90-degree rotation of the facing vector
 
-    body = (35, 33, 31)
-    ear_shade = (58, 54, 50)
-    belly = (120, 112, 104)
-    outline = (150, 140, 130)
-    collar = (196, 40, 60)
+    # A wheaten (cream/tan) Scottie -- a real coat-colour variant of the
+    # breed -- rather than the traditional solid black, specifically
+    # because a black dog on the maze's black field was nearly invisible.
+    # The player character must be the single most readable thing on
+    # screen; a warm light body against the black maze guarantees that
+    # regardless of which sprite frame or ghost is nearby.
+    body_color = (224, 196, 140)
+    shade_color = (188, 156, 100)  # snout / ears, one notch darker
+    outline = (108, 82, 46)
+    collar = (196, 32, 48)  # CMU red
+    nose_color = (40, 32, 24)
 
-    pygame.draw.circle(surf, body, (round(cx), round(cy)), round(radius))
+    # The body silhouette is elongated along the facing axis (rather than
+    # a plain circle) and carries a distinct snout, ears, and tail, so
+    # Scotty's outline reads as "a dog" and is not confusable with a
+    # ghost's round-domed shape even at a glance.
+    if fx != 0:
+        body_w, body_h = radius * 2.3, radius * 1.7
+    else:
+        body_w, body_h = radius * 1.7, radius * 2.3
+    body_rect = pygame.Rect(0, 0, body_w, body_h)
+    body_rect.center = (cx, cy)
+    pygame.draw.ellipse(surf, body_color, body_rect)
+    pygame.draw.ellipse(surf, outline, body_rect, 2)
 
-    belly_w, belly_h = radius * 0.75, radius * 0.55
-    pygame.draw.ellipse(
-        surf,
-        belly,
-        pygame.Rect(
-            round(cx - belly_w / 2), round(cy + radius * 0.2), round(belly_w), round(belly_h)
-        ),
+    # Snout, pushed toward the facing direction.
+    snout_w, snout_h = (radius * 0.95, radius * 0.7) if fx != 0 else (radius * 0.7, radius * 0.95)
+    snout_cx = cx + fx * radius * 0.95
+    snout_cy = cy + fy * radius * 0.95
+    snout_rect = pygame.Rect(0, 0, snout_w, snout_h)
+    snout_rect.center = (snout_cx, snout_cy)
+    pygame.draw.ellipse(surf, shade_color, snout_rect)
+    pygame.draw.ellipse(surf, outline, snout_rect, 1)
+
+    nose_x = snout_cx + fx * snout_w * 0.42
+    nose_y = snout_cy + fy * snout_h * 0.42
+
+    # Two pointed ears, one on either side of the head, near the snout.
+    ear_base_x = cx + fx * radius * 0.35
+    ear_base_y = cy + fy * radius * 0.35
+    for side in (-1, 1):
+        ex = ear_base_x + perp_x * radius * 0.6 * side
+        ey = ear_base_y + perp_y * radius * 0.6 * side
+        tip_x = ex + fx * radius * 0.4 + perp_x * radius * 0.15 * side
+        tip_y = ey + fy * radius * 0.4 + perp_y * radius * 0.15 * side
+        base1 = (ex - perp_x * radius * 0.22 * side, ey - perp_y * radius * 0.22 * side)
+        base2 = (ex + perp_x * radius * 0.22 * side, ey + perp_y * radius * 0.22 * side)
+        pygame.draw.polygon(surf, shade_color, [base1, base2, (tip_x, tip_y)])
+        pygame.draw.polygon(surf, outline, [base1, base2, (tip_x, tip_y)], 1)
+
+    # A short tail at the rear, opposite the snout.
+    tail_x = cx - fx * radius * 1.05
+    tail_y = cy - fy * radius * 1.05
+    tail_tip_x = tail_x - fx * radius * 0.5 + perp_x * radius * 0.25
+    tail_tip_y = tail_y - fy * radius * 0.5 + perp_y * radius * 0.25
+    pygame.draw.line(
+        surf, outline, (tail_x, tail_y), (tail_tip_x, tail_tip_y), max(2, round(radius * 0.22))
     )
 
-    ear_dx, ear_dy = radius * 0.55, radius * 0.55
-    left_ear = [
-        (cx - ear_dx, cy - ear_dy),
-        (cx - radius * 0.12, cy - radius * 1.05),
-        (cx - radius * 0.02, cy - radius * 0.3),
-    ]
-    right_ear = [
-        (cx + ear_dx, cy - ear_dy),
-        (cx + radius * 0.12, cy - radius * 1.05),
-        (cx + radius * 0.02, cy - radius * 0.3),
-    ]
-    pygame.draw.polygon(surf, ear_shade, left_ear)
-    pygame.draw.polygon(surf, ear_shade, right_ear)
-    pygame.draw.polygon(surf, outline, left_ear, 1)
-    pygame.draw.polygon(surf, outline, right_ear, 1)
+    # Collar at the neck, between the body and the snout.
+    collar_x = cx + fx * radius * 0.15
+    collar_y = cy + fy * radius * 0.15
+    pygame.draw.circle(surf, collar, (round(collar_x), round(collar_y)), max(1, round(radius * 0.11)))
 
-    # a little collar, always at the "back of the neck" opposite the mouth
-    collar_angle = math.radians(DIRECTION_ANGLES[direction] + 180)
-    collar_x = cx + math.cos(collar_angle) * radius * 0.55
-    collar_y = cy + math.sin(collar_angle) * radius * 0.55
-    pygame.draw.circle(surf, collar, (round(collar_x), round(collar_y)), max(1, round(radius * 0.14)))
+    # A single eye, offset to one side of the snout.
+    eye_x = snout_cx - fx * radius * 0.1 + perp_x * radius * 0.32
+    eye_y = snout_cy - fy * radius * 0.1 + perp_y * radius * 0.32
+    pygame.draw.circle(surf, (250, 245, 235), (round(eye_x), round(eye_y)), max(2, round(radius * 0.17)))
+    pygame.draw.circle(surf, (18, 15, 12), (round(eye_x), round(eye_y)), max(1, round(radius * 0.09)))
 
-    # chomping mouth wedge, cut fully transparent, aimed at the facing direction
-    angle_center = DIRECTION_ANGLES[direction]
-    half_angle = 16 if frame == 1 else 42
+    # Nose + a small chomping mouth wedge (cut fully transparent), aimed
+    # at the facing direction and animated between frames.
+    half_angle = 12 if frame == 1 else 30
+    angle_center = math.degrees(math.atan2(fy, fx))
     a1 = math.radians(angle_center - half_angle)
     a2 = math.radians(angle_center + half_angle)
-    reach = radius * 1.3
-    p1 = (cx + math.cos(a1) * reach, cy + math.sin(a1) * reach)
-    p2 = (cx + math.cos(a2) * reach, cy + math.sin(a2) * reach)
-    pygame.draw.polygon(surf, TRANSPARENT, [(cx, cy), p1, p2])
+    reach = radius * 0.9
+    p1 = (nose_x + math.cos(a1) * reach, nose_y + math.sin(a1) * reach)
+    p2 = (nose_x + math.cos(a2) * reach, nose_y + math.sin(a2) * reach)
+    pygame.draw.polygon(surf, TRANSPARENT, [(nose_x, nose_y), p1, p2])
+    pygame.draw.circle(surf, nose_color, (round(nose_x), round(nose_y)), max(1, round(radius * 0.12)))
 
-    eye_angle = math.radians(angle_center - 100)
-    eye_x = cx + math.cos(eye_angle) * radius * 0.45
-    eye_y = cy + math.sin(eye_angle) * radius * 0.45
-    pygame.draw.circle(surf, (230, 220, 210), (round(eye_x), round(eye_y)), max(2, round(radius * 0.18)))
-    pygame.draw.circle(surf, (12, 12, 12), (round(eye_x), round(eye_y)), max(1, round(radius * 0.09)))
-
-    pygame.draw.circle(surf, outline, (round(cx), round(cy)), round(radius), 1)
     return surf
 
 
