@@ -263,6 +263,94 @@ class MainMenuTests(unittest.TestCase):
         self.assertEqual(game.state, GameState.ATTRACT)
 
 
+class HowToPlayBackControlTests(unittest.TestCase):
+    """Going back from HOW TO PLAY should be intuitive: Esc/Backspace or
+    button B (0) -- not confirm-only. Esc means "back" on this one
+    screen; everywhere else it still means "exit", exactly like P1.
+    """
+
+    @staticmethod
+    def _frame(game, raw, dt=1 / 60.0):
+        # Mirrors Game.run()'s real per-frame order: the exit check runs
+        # BEFORE update() so it always sees the state update() is about
+        # to (possibly) change -- this is the order that matters for the
+        # held-button-across-a-transition scenarios below.
+        game.maybe_exit(raw)
+        game.update(dt, raw)
+
+    def test_escape_on_how_to_play_returns_to_menu_without_exiting(self):
+        game = Game(rng=random.Random(40))
+        game.state = GameState.HOW_TO_PLAY
+        try:
+            self._frame(game, RawInput(pressed_keys=frozenset({"escape"})))
+        except SystemExit:
+            self.fail("Esc exited the process from HOW_TO_PLAY")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_backspace_on_how_to_play_also_returns_to_menu(self):
+        game = Game(rng=random.Random(41))
+        game.state = GameState.HOW_TO_PLAY
+        try:
+            self._frame(game, RawInput(pressed_keys=frozenset({"backspace"})))
+        except SystemExit:
+            self.fail("Backspace exited the process from HOW_TO_PLAY")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_button_b_on_how_to_play_also_returns_to_menu(self):
+        game = Game(rng=random.Random(42))
+        game.state = GameState.HOW_TO_PLAY
+        try:
+            self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_B})))
+        except SystemExit:
+            self.fail("button B exited the process from HOW_TO_PLAY")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_p1_on_how_to_play_still_exits(self):
+        game = Game(rng=random.Random(43))
+        game.state = GameState.HOW_TO_PLAY
+        with self.assertRaises(SystemExit) as cm:
+            self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_escape_on_the_main_menu_still_exits(self):
+        game = Game(rng=random.Random(44))
+        self.assertEqual(game.state, GameState.ATTRACT)
+        with self.assertRaises(SystemExit) as cm:
+            self._frame(game, RawInput(pressed_keys=frozenset({"escape"})))
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_held_escape_through_the_how_to_play_transition_does_not_chain_into_exit(self):
+        # Regression: Esc means "back" on HOW_TO_PLAY, so a single Esc
+        # press/hold that carries the game back to ATTRACT must not then
+        # be re-read as a fresh "Esc means exit" press the instant the
+        # menu appears -- it must be seen released first.
+        game = Game(rng=random.Random(45))
+        game.state = GameState.HOW_TO_PLAY
+        held_esc = RawInput(pressed_keys=frozenset({"escape"}))
+        try:
+            for _ in range(15):  # hold well past the HOW_TO_PLAY -> ATTRACT flip
+                self._frame(game, held_esc)
+        except SystemExit:
+            self.fail("held Esc chained HOW_TO_PLAY -> ATTRACT -> exit in one hold")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+        # Release, then a genuine fresh Esc on the menu still exits.
+        self._frame(game, RawInput())
+        with self.assertRaises(SystemExit):
+            self._frame(game, held_esc)
+
+    def test_held_button_b_through_the_transition_does_not_chain(self):
+        game = Game(rng=random.Random(46))
+        game.state = GameState.HOW_TO_PLAY
+        held_b = RawInput(pressed_buttons=frozenset({config.BUTTON_B}))
+        try:
+            for _ in range(15):
+                self._frame(game, held_b)
+        except SystemExit:
+            self.fail("held button B chained into an exit")
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+
 class HeldButtonAtStartupTests(unittest.TestCase):
     """Regression tests for the "launched from the gallery with the
     select button still held" bug: the ArcadeLauncher's gallery is left

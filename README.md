@@ -53,6 +53,7 @@ and name are not, and this project doesn't reproduce them.
 |---|---|
 | Joystick (either connected stick), axis 0/1 | Steer Scotty / navigate the menu |
 | Button 1 (A) or Button 9 (Start) | Confirm / select the highlighted menu entry |
+| **Button 0 (B)** | **Back** -- return to the menu from HOW TO PLAY |
 | **Button 5 (P1)** | **Exit immediately**, from any screen, back to the launcher |
 
 The cabinet has two identical joystick devices; either one can steer.
@@ -68,7 +69,9 @@ several feet away. It's also the one place that tells a visitor P1 exits
 back to the launcher's gallery, since the gallery itself doesn't say so.
 **Exit to Gallery** does exactly what P1 does. **How to Play** is a full
 screen covering controls, the ghost cast, scoring, and power pellets;
-confirm again to return to the menu.
+button B (or Esc/Backspace on a keyboard, or confirm) returns to the
+menu -- see "Back vs. exit" below for why that screen treats Esc
+differently from everywhere else.
 
 ### Keyboard (development)
 
@@ -76,7 +79,27 @@ confirm again to return to the menu.
 |---|---|
 | Arrow keys or WASD | Steer Scotty / navigate the menu |
 | Enter / Space | Confirm / select |
-| Esc | Exit immediately |
+| Backspace | Back -- return to the menu from HOW TO PLAY |
+| Esc | Exit immediately (except on HOW TO PLAY, where it means Back) |
+
+### Back vs. exit
+
+Confirm always means "forward" and P1 always means "leave the game" --
+neither of those ever changes. Esc is the one control whose meaning is
+context-dependent, and it's deliberately consistent with what a person
+would expect at each screen:
+
+- **HOW TO PLAY** -- Esc (or Backspace, or button B) goes **back** to
+  the menu. It does **not** exit; P1 is the only way to exit from here.
+- **Main menu, gameplay, game over** -- Esc exits to the gallery, same
+  as P1, since there's nothing to "go back" to from those screens.
+
+A held Esc (or button B) can't chain two screen transitions in a row --
+e.g. holding it to leave HOW TO PLAY can't also be read as a fresh
+"Esc means exit" press the instant the menu appears. See
+`Game.maybe_exit()`'s per-signal armed/disarmed latch for how that's
+guarded, on top of the same startup input-residue protection described
+below.
 
 ## Running locally
 

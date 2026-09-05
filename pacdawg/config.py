@@ -197,6 +197,12 @@ BUTTON_START = 9
 
 CONFIRM_BUTTONS = (BUTTON_A, BUTTON_START)
 EXIT_BUTTONS = (BUTTON_P1,)
+# "Cancel/back" -- button B (0) is the natural back partner to A (1) on
+# this cabinet's layout. Used by screens that need to go back rather
+# than exit outright (currently just HOW TO PLAY -> menu); deliberately
+# distinct from EXIT_BUTTONS so P1 always means "leave the game" and
+# never gets reinterpreted as a mere "back".
+BACK_BUTTONS = (BUTTON_B,)
 
 JOYSTICK_AXIS_X = 0
 JOYSTICK_AXIS_Y = 1

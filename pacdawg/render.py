@@ -210,23 +210,26 @@ def _draw_attract_screen(screen, game: Game, total_time: float) -> None:
 
 def _draw_how_to_play_screen(screen, game: Game) -> None:
     """A real instructions screen: controls, the ghost cast, scoring, and
-    what power pellets do. Reached from the main menu; A/Start/Enter/
-    Space (and P1/Esc, always) return."""
+    what power pellets do. Reached from the main menu. B/Esc/Backspace
+    (or A/Start/Enter/Space) go back to the menu; P1 always exits to the
+    gallery -- deliberately different controls, since Esc means "back"
+    on this one screen rather than "exit" (see Game.maybe_exit)."""
     big = _font(34)
     small = _font(19)
     label = _font(20)
     tiny = _font(15)
 
-    _center_text_at(screen, big, "HOW TO PLAY", HUD_ACCENT_COLOR, 34)
+    _center_text_at(screen, big, "HOW TO PLAY", HUD_ACCENT_COLOR, 30)
 
-    _center_text_at(screen, label, "CONTROLS", HUD_DIM_COLOR, 70)
-    _center_text_at(screen, small, "JOYSTICK (EITHER STICK) OR ARROWS/WASD  --  MOVE", HUD_TEXT_COLOR, 94)
-    _center_text_at(screen, small, "BUTTON A OR START, OR ENTER/SPACE  --  CONFIRM", HUD_TEXT_COLOR, 116)
-    _center_text_at(screen, small, "BUTTON P1, OR ESC  --  EXIT ANYTIME", HUD_ACCENT_COLOR, 138)
+    _center_text_at(screen, label, "CONTROLS", HUD_DIM_COLOR, 64)
+    _center_text_at(screen, small, "JOYSTICK (EITHER STICK) OR ARROWS/WASD  --  MOVE", HUD_TEXT_COLOR, 87)
+    _center_text_at(screen, small, "BUTTON A OR START, OR ENTER/SPACE  --  CONFIRM", HUD_TEXT_COLOR, 108)
+    _center_text_at(screen, small, "BUTTON B, OR ESC/BACKSPACE  --  BACK", HUD_TEXT_COLOR, 129)
+    _center_text_at(screen, small, "BUTTON P1  --  EXIT ANYTIME", HUD_ACCENT_COLOR, 150)
 
-    _center_text_at(screen, label, "THE GHOSTS", HUD_DIM_COLOR, 172)
-    roster_top = 198
-    row_height = 32
+    _center_text_at(screen, label, "THE GHOSTS", HUD_DIM_COLOR, 182)
+    roster_top = 206
+    row_height = 30
     sprite_col_x = config.SCREEN_WIDTH // 2 - 190
     text_col_x = config.SCREEN_WIDTH // 2 - 150
     for i, name in enumerate(GHOST_DISPLAY_ORDER):
@@ -240,18 +243,23 @@ def _draw_how_to_play_screen(screen, game: Game) -> None:
         desc_surface = tiny.render(GHOST_HOW_TO_PLAY_TEXT[name], True, HUD_TEXT_COLOR)
         screen.blit(desc_surface, (text_col_x + 110, row_y - 8))
 
-    _center_text_at(screen, label, "SCORING", HUD_DIM_COLOR, 340)
-    _center_text_at(screen, small, "PELLET 10 PTS  --  POWER PELLET 50 PTS", HUD_TEXT_COLOR, 364)
-    _center_text_at(screen, small, "GHOSTS EATEN IN A ROW: 200 / 400 / 800 / 1600", HUD_TEXT_COLOR, 386)
-    _center_text_at(screen, small, "EXTRA LIFE AT 10,000 POINTS", HUD_TEXT_COLOR, 408)
+    _center_text_at(screen, label, "SCORING", HUD_DIM_COLOR, 330)
+    _center_text_at(screen, small, "PELLET 10 PTS  --  POWER PELLET 50 PTS", HUD_TEXT_COLOR, 352)
+    _center_text_at(screen, small, "GHOSTS EATEN IN A ROW: 200 / 400 / 800 / 1600", HUD_TEXT_COLOR, 372)
+    _center_text_at(screen, small, "EXTRA LIFE AT 10,000 POINTS", HUD_TEXT_COLOR, 392)
 
-    _center_text_at(screen, label, "POWER PELLETS", HUD_DIM_COLOR, 442)
+    _center_text_at(screen, label, "POWER PELLETS", HUD_DIM_COLOR, 424)
     _center_text_at(
-        screen, small, "TURN THE GHOSTS BLUE AND EDIBLE FOR A SHORT TIME", HUD_TEXT_COLOR, 466
+        screen, small, "TURN THE GHOSTS BLUE AND EDIBLE FOR A SHORT TIME", HUD_TEXT_COLOR, 446
     )
 
-    _draw_dim_panel(screen, 556, 44)
-    _center_text_at(screen, small, "A / START / ENTER TO GO BACK", HUD_ACCENT_COLOR, 556)
+    # The prompt leads with "back" (the intuitive way to leave this
+    # screen) and calls out the exit control as a distinct, separate
+    # thing directly beneath it, so the two are never confused.
+    _draw_dim_panel(screen, 540, 80)
+    _center_text_at(screen, small, "B / ESC TO GO BACK", HUD_ACCENT_COLOR, 522)
+    _center_text_at(screen, tiny, "(A / START / ENTER ALSO GOES BACK)", HUD_DIM_COLOR, 542)
+    _center_text_at(screen, small, "P1 EXITS TO THE GALLERY", HUD_ACCENT_COLOR, 564)
 
 
 def _draw_dim_panel(screen, center_y: int, height: int) -> None:
