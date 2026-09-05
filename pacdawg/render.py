@@ -21,6 +21,23 @@ from .maze import Maze
 BACKGROUND_COLOR = (0, 0, 0)
 HUD_TEXT_COLOR = (255, 255, 255)
 HUD_ACCENT_COLOR = (255, 210, 90)
+HUD_DIM_COLOR = (150, 150, 150)
+
+# Ghost display colors/roles for the attract screen's cast roster --
+# matches the sprite colors declared in tools/generate_placeholders.py.
+GHOST_DISPLAY_ORDER = ("gates", "hunt", "wean", "doherty")
+GHOST_DISPLAY_COLORS = {
+    "gates": (214, 40, 40),
+    "hunt": (255, 128, 200),
+    "wean": (64, 200, 220),
+    "doherty": (240, 150, 60),
+}
+GHOST_ROLE_TEXT = {
+    "gates": "DIRECT CHASER",
+    "hunt": "AMBUSHER",
+    "wean": "FLANKER",
+    "doherty": "SHY RETREATER",
+}
 
 _ANIM_INTERVAL = 0.12
 
@@ -114,6 +131,66 @@ def _center_text(screen, font, text, color, y_offset) -> None:
     screen.blit(surface, rect)
 
 
+def _center_text_at(screen, font, text, color, y: int) -> None:
+    surface = font.render(text, True, color)
+    rect = surface.get_rect(center=(config.SCREEN_WIDTH // 2, y))
+    screen.blit(surface, rect)
+
+
+def _draw_attract_screen(screen, game: Game, total_time: float) -> None:
+    """The title screen shown on launch and after every game over.
+
+    This is the only place visitors are told P1 exits to the launcher's
+    gallery -- the gallery itself no longer says so -- so it has to be
+    unmissable, alongside a clear "how do I start" prompt naming the real
+    arcade buttons.
+    """
+    huge = _font(64)
+    big = _font(30)
+    small = _font(20)
+    tiny = _font(16)
+
+    _center_text_at(screen, huge, "PACDAWG", HUD_ACCENT_COLOR, 74)
+    _center_text_at(screen, small, "A CMU ARCADE ORIGINAL, STARRING SCOTTY", HUD_DIM_COLOR, 114)
+
+    # Cast roster, one row per ghost: sprite + colored name + one-word role.
+    roster_top = 168
+    row_height = 46
+    sprite_col_x = config.SCREEN_WIDTH // 2 - 150
+    text_col_x = config.SCREEN_WIDTH // 2 - 100
+    for i, name in enumerate(GHOST_DISPLAY_ORDER):
+        row_y = roster_top + i * row_height
+        sprite = assets.get(f"ghost_{name}_1")
+        sprite = pygame.transform.scale(sprite, (sprite.get_width() * 2, sprite.get_height() * 2))
+        rect = sprite.get_rect(midleft=(sprite_col_x, row_y))
+        screen.blit(sprite, rect)
+        name_surface = small.render(name.upper(), True, GHOST_DISPLAY_COLORS[name])
+        screen.blit(name_surface, (text_col_x, row_y - 16))
+        role_surface = tiny.render(GHOST_ROLE_TEXT[name], True, HUD_DIM_COLOR)
+        screen.blit(role_surface, (text_col_x, row_y + 4))
+
+    _center_text_at(screen, small, f"HIGH SCORE  {game.score.high_score:06d}", HUD_ACCENT_COLOR, 400)
+
+    # A slow pulse keeps the title screen from feeling like a frozen
+    # screenshot without resorting to anything busy.
+    pulse_on = int(total_time / 0.5) % 2 == 0
+    if pulse_on:
+        _center_text_at(screen, big, "PRESS A OR START TO PLAY", HUD_TEXT_COLOR, 460)
+    _center_text_at(screen, tiny, "(ENTER OR SPACE ON KEYBOARD)", HUD_DIM_COLOR, 490)
+
+    _center_text_at(screen, small, "PRESS P1 TO EXIT TO THE GALLERY", HUD_ACCENT_COLOR, 536)
+    _center_text_at(screen, tiny, "(ESC ON KEYBOARD)", HUD_DIM_COLOR, 560)
+
+
+def _draw_dim_panel(screen, center_y: int, height: int) -> None:
+    """A translucent backing panel so overlay text stays readable against
+    a busy maze full of ghosts and pellets behind it."""
+    panel = pygame.Surface((config.SCREEN_WIDTH, height), pygame.SRCALPHA)
+    panel.fill((0, 0, 0, 190))
+    rect = panel.get_rect(center=(config.SCREEN_WIDTH // 2, center_y))
+    screen.blit(panel, rect)
+
+
 def _draw_hud(screen, game: Game) -> None:
     small = _font(20)
     big = _font(30)
@@ -135,24 +212,26 @@ def _draw_hud(screen, game: Game) -> None:
         y = config.SCREEN_HEIGHT - life_icon.get_height() - 4
         screen.blit(life_icon, (x, y))
 
-    if game.state is GameState.ATTRACT:
-        _center_text(screen, big, "PACDAWG", HUD_ACCENT_COLOR, -20)
-        _center_text(screen, small, "PRESS START", HUD_TEXT_COLOR, 20)
-    elif game.state is GameState.READY:
+    if game.state is GameState.READY:
+        _draw_dim_panel(screen, config.SCREEN_HEIGHT // 2, 40)
         _center_text(screen, big, "READY!", HUD_ACCENT_COLOR, 0)
     elif game.state is GameState.GAME_OVER:
-        _center_text(screen, big, "GAME OVER", HUD_ACCENT_COLOR, -20)
-        _center_text(screen, small, "PRESS START", HUD_TEXT_COLOR, 20)
+        _draw_dim_panel(screen, config.SCREEN_HEIGHT // 2, 110)
+        _center_text(screen, big, "GAME OVER", HUD_ACCENT_COLOR, -40)
+        _center_text(screen, small, f"FINAL SCORE {game.score.score:06d}", HUD_TEXT_COLOR, -8)
+        _center_text(screen, small, "PRESS START FOR THE TITLE SCREEN", HUD_TEXT_COLOR, 24)
 
 
 def draw_frame(screen, game: Game) -> None:
     """Render one full frame from the current game state."""
     total_time = pygame.time.get_ticks() / 1000.0
     screen.fill(BACKGROUND_COLOR)
+    if game.state is GameState.ATTRACT:
+        _draw_attract_screen(screen, game, total_time)
+        return
     _draw_maze(screen, game.maze)
     _draw_fruit(screen, game)
-    if game.state is not GameState.ATTRACT:
-        _draw_scotty(screen, game, total_time)
-        for ghost in game.ghosts.values():
-            _draw_ghost(screen, ghost, total_time)
+    _draw_scotty(screen, game, total_time)
+    for ghost in game.ghosts.values():
+        _draw_ghost(screen, ghost, total_time)
     _draw_hud(screen, game)

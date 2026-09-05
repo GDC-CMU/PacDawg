@@ -67,29 +67,64 @@ def target_gates(ghost: "Ghost", player, ghosts: Dict[str, "Ghost"], maze: Maze)
     return player.tile
 
 
+def _facing_offset_with_overflow(facing: Direction, magnitude: int) -> Coord:
+    """Reproduce the original ROM's documented "up" targeting bug.
+
+    The original computes an offset by doubling a 16-bit (dx, dy) vector
+    with a single ``ADD HL,HL`` Z80 instruction (doubled again for Pinky's
+    4-tile offset). That instruction doubles the *whole* 16-bit value,
+    so when facing up the vector (0, -1) is stored as the 16-bit pattern
+    for (1, -1) and a carry leaks from the low byte into the high byte:
+    "4 tiles up" becomes "4 tiles up AND 4 tiles left". Don Hodges'
+    ROM-level writeup confirms this is a genuine bug, not a design choice
+    -- but it is load-bearing for authentic ghost behavior (it is why
+    Pinky/Inky-style ghosts can be out-maneuvered by facing up), so we
+    deliberately reproduce it rather than "fixing" it.
+    """
+    if facing is Direction.UP:
+        return (-magnitude, -magnitude)
+    fx, fy = facing.vector
+    return (fx * magnitude, fy * magnitude)
+
+
 def target_hunt(ghost: "Ghost", player, ghosts: Dict[str, "Ghost"], maze: Maze) -> Coord:
-    """Ambusher: aim four tiles ahead of the way Scotty is facing."""
+    """Ambusher: aim four tiles ahead of the way Scotty is facing.
+
+    Reproduces the documented "up" overflow bug: facing up targets four
+    tiles up *and* four tiles left, not simply four tiles up.
+    """
     px, py = player.tile
-    fx, fy = player.facing.vector
-    return (px + fx * 4, py + fy * 4)
+    ox, oy = _facing_offset_with_overflow(player.facing, 4)
+    return (px + ox, py + oy)
 
 
 def target_wean(ghost: "Ghost", player, ghosts: Dict[str, "Ghost"], maze: Maze) -> Coord:
-    """Flanker: reflect Gates' position through a point ahead of Scotty."""
+    """Flanker: reflect Gates' position through a point ahead of Scotty.
+
+    The "pivot" point two tiles ahead of Scotty is subject to the same
+    documented "up" overflow bug as Hunt's target (see
+    ``_facing_offset_with_overflow``).
+    """
     px, py = player.tile
-    fx, fy = player.facing.vector
-    pivot_x, pivot_y = px + fx * 2, py + fy * 2
+    ox, oy = _facing_offset_with_overflow(player.facing, 2)
+    pivot_x, pivot_y = px + ox, py + oy
     gates = ghosts.get("gates")
     gx, gy = gates.tile if gates is not None else (px, py)
     return (2 * pivot_x - gx, 2 * pivot_y - gy)
 
 
 def target_doherty(ghost: "Ghost", player, ghosts: Dict[str, "Ghost"], maze: Maze) -> Coord:
-    """Shy: chase from afar, but flee home once Scotty gets close."""
+    """Shy: chase from afar, but flee home once Scotty gets close.
+
+    The 8-tile-or-more threshold is inclusive (``>= 64`` squared tiles),
+    matching the Dossier's "eight tiles or more" wording -- one of the
+    two reference clones examined flips behavior at exactly 8 tiles by
+    using a strict ``>``, which the documentation explicitly does not.
+    """
     gx, gy = ghost.tile
     px, py = player.tile
     distance_sq = (gx - px) ** 2 + (gy - py) ** 2
-    if distance_sq > 64:  # farther than 8 tiles: come on in
+    if distance_sq >= 64:  # eight tiles or more: come on in
         return (px, py)
     return ghost.corner  # too close: lose your nerve and retreat
 
@@ -106,16 +141,39 @@ from .entities import TURN_PRIORITY  # noqa: E402  (after TARGET_FUNCTIONS for r
 
 
 class Ghost(MovingActor):
-    def __init__(self, name: str, start: Coord, corner: Coord, speed: float):
-        super().__init__(start[0], start[1], speed)
+    def __init__(
+        self,
+        name: str,
+        start: Coord,
+        corner: Coord,
+        normal_speed: float,
+        frightened_speed: float = None,
+        tunnel_speed: float = None,
+        eyes_speed: float = None,
+        house_pace_speed: float = None,
+        elroy1_speed: float = None,
+        elroy2_speed: float = None,
+    ):
+        super().__init__(start[0], start[1], normal_speed)
         self.name = name
         self.corner = corner
         self.mode = GhostMode.HOUSE
-        self.base_speed = speed
+        self.base_speed = normal_speed
+        self.frightened_speed = frightened_speed if frightened_speed is not None else normal_speed
+        self.tunnel_speed = tunnel_speed if tunnel_speed is not None else normal_speed
+        self.eyes_speed = eyes_speed if eyes_speed is not None else normal_speed
+        self.house_pace_speed = house_pace_speed if house_pace_speed is not None else normal_speed * 0.5
+        # Cruise Elroy speeds only ever apply to Gates (Blinky); harmless
+        # defaults for the other three, which never set elroy_stage > 0.
+        self._elroy1_speed = elroy1_speed if elroy1_speed is not None else normal_speed
+        self._elroy2_speed = elroy2_speed if elroy2_speed is not None else normal_speed
         self.frightened_seconds_left = 0.0
         self.frightened_total = 0.0
+        self.frightened_flash_count = 0
         self.house_bob_direction = Direction.UP
         self.released = False
+        self.elroy_stage = 0  # 0 = normal, 1 = Elroy 1, 2 = Elroy 2 (Gates only)
+        self._pending_reversal = False
         self._house_anchor_row = float(start[1])
 
     def teleport(self, col: int, row: int, direction: Direction = Direction.NONE) -> None:
@@ -150,7 +208,7 @@ class Ghost(MovingActor):
         # different integer right after the first clamp and the anchor
         # would otherwise silently drift, one row per bounce, forever.
         span = 0.6
-        speed = 2.0
+        speed = self.house_pace_speed
         dy = speed * dt * (1 if self.house_bob_direction is Direction.DOWN else -1)
         self.y += dy
         base_row = self._house_anchor_row
@@ -162,13 +220,19 @@ class Ghost(MovingActor):
             self.house_bob_direction = Direction.DOWN
 
     # -- frightened / eaten --------------------------------------------------
-    def frighten(self, seconds: float) -> None:
+    def frighten(self, seconds: float, flash_count: int = 0) -> None:
         if self.mode not in (GhostMode.SCATTER, GhostMode.CHASE):
             return  # only actively hunting ghosts can be spooked
         self.mode = GhostMode.FRIGHTENED
         self.frightened_seconds_left = seconds
         self.frightened_total = seconds
-        self._snap_and_reverse()  # classic "spooked" reversal
+        self.frightened_flash_count = flash_count
+        # Forced reversal on entering frightened -- but per the documented
+        # rule, it "takes effect when the ghost next enters a tile", not
+        # instantly mid-corridor. Defer it via the pending-reversal flag,
+        # consumed by _step_toward/_step_random's on_center the next time
+        # this ghost actually arrives at a tile center.
+        self._pending_reversal = True
 
     def get_eaten(self) -> None:
         self.mode = GhostMode.EATEN
@@ -189,19 +253,26 @@ class Ghost(MovingActor):
         self.x, self.y = float(round(self.x)), float(round(self.y))
         self.direction = self.direction.opposite
         self.queued_direction = Direction.NONE
+        self._pending_reversal = False
         dx, dy = self.direction.vector
         self._target_x = self.x + dx
         self._target_y = self.y + dy
 
     @property
     def is_flashing(self) -> bool:
-        if self.mode is not GhostMode.FRIGHTENED:
+        """True during the alternating blue/white flash near the end of
+        frightened mode. One flash = two FRIGHTENED_FLASH_TOGGLE_SECONDS
+        intervals (blue, then white); the flash *count* varies by level,
+        so the lead-in window is computed per ghost, not a flat constant.
+        """
+        if self.mode is not GhostMode.FRIGHTENED or self.frightened_flash_count <= 0:
             return False
-        if self.frightened_seconds_left > config.FRIGHTENED_FLASH_SECONDS:
+        toggle = config.FRIGHTENED_FLASH_TOGGLE_SECONDS
+        lead_in = self.frightened_flash_count * 2 * toggle
+        if self.frightened_seconds_left > lead_in:
             return False
-        # Toggle on/off every FRIGHTENED_FLASH_INTERVAL seconds.
-        cycles = self.frightened_seconds_left / config.FRIGHTENED_FLASH_INTERVAL
-        return int(cycles) % 2 == 0
+        elapsed_in_window = lead_in - self.frightened_seconds_left
+        return int(elapsed_in_window / toggle) % 2 == 0
 
     # -- per-frame update -----------------------------------------------------
     def update(
@@ -220,6 +291,7 @@ class Ghost(MovingActor):
         if self.mode is GhostMode.FRIGHTENED:
             self.frightened_seconds_left = max(0.0, self.frightened_seconds_left - dt)
             if self.frightened_seconds_left <= 0.0:
+                # No reversal on leaving frightened -- only on entering it.
                 self.mode = GhostMode.CHASE if global_phase == "chase" else GhostMode.SCATTER
 
         can_enter = maze.can_ghost_enter
@@ -246,26 +318,38 @@ class Ghost(MovingActor):
             self._step_random(maze, dt, can_enter, rng, speed)
             return
 
-        # SCATTER or CHASE: personality-driven target seeking.
-        target = self.corner if self.mode is GhostMode.SCATTER else TARGET_FUNCTIONS[self.name](
-            self, player, ghosts, maze
-        )
+        # SCATTER or CHASE: personality-driven target seeking. Cruise Elroy
+        # (Gates only, once active) targets Scotty directly even during
+        # scatter, per the documented rule -- the other three ghosts keep
+        # scattering normally.
+        if self.mode is GhostMode.SCATTER and not (self.name == "gates" and self.elroy_stage > 0):
+            target = self.corner
+        else:
+            target = TARGET_FUNCTIONS[self.name](self, player, ghosts, maze)
         self._step_toward(maze, dt, can_enter, target, speed)
 
     def _current_speed(self, maze: Maze) -> float:
         if self.mode is GhostMode.FRIGHTENED:
-            base = config.FRIGHTENED_GHOST_SPEED
+            base = self.frightened_speed
         elif self.mode is GhostMode.EATEN:
-            base = config.EATEN_GHOST_SPEED
+            base = self.eyes_speed
+        elif self.name == "gates" and self.elroy_stage == 2:
+            base = self._elroy2_speed
+        elif self.name == "gates" and self.elroy_stage == 1:
+            base = self._elroy1_speed
         else:
             base = self.base_speed
         row = round(self.y)
         if maze.is_tunnel_row(row) and self.mode not in (GhostMode.EATEN,):
-            return base * config.TUNNEL_SPEED_MULTIPLIER
+            return self.tunnel_speed
         return base
 
     def _step_toward(self, maze: Maze, dt: float, can_enter, target: Coord, speed: float) -> None:
         def on_center(actor: "Ghost") -> None:
+            if actor._pending_reversal:
+                actor._pending_reversal = False
+                actor.queue_direction(actor.direction.opposite)
+                return
             if actor.tile == target:
                 # Arrived exactly at a static target (e.g. the house exit
                 # or the gate). The greedy seek rule below always picks
@@ -284,6 +368,10 @@ class Ghost(MovingActor):
 
     def _step_random(self, maze: Maze, dt: float, can_enter, rng: random.Random, speed: float) -> None:
         def on_center(actor: "Ghost") -> None:
+            if actor._pending_reversal:
+                actor._pending_reversal = False
+                actor.queue_direction(actor.direction.opposite)
+                return
             options = actor.available_directions(maze, can_enter)
             if actor.direction is not Direction.NONE:
                 reverse = actor.direction.opposite
@@ -321,8 +409,9 @@ def _best_seeking_direction(ghost: Ghost, maze: Maze, can_enter, target: Coord) 
 
 
 def create_ghosts(maze: Maze, level: int) -> Dict[str, Ghost]:
-    """Build the four ghosts at their maze-defined starting tiles."""
-    from .levels import speed_multiplier_for_level
+    """Build the four ghosts at their maze-defined starting tiles, with
+    every documented per-level speed pre-computed (Dossier Table A.1)."""
+    from . import levels
 
     missing = set(GHOST_MARKERS.values()) - set(maze.ghost_starts)
     if missing:
@@ -330,26 +419,44 @@ def create_ghosts(maze: Maze, level: int) -> Dict[str, Ghost]:
             f"maze '{maze.name}' is missing ghost start marker(s) for: {sorted(missing)}"
         )
 
-    multiplier = speed_multiplier_for_level(level)
+    normal_speed = levels.ghost_normal_speed(level)
+    frightened_speed = levels.ghost_frightened_speed(level)
+    tunnel_speed = levels.ghost_tunnel_speed(level)
+    eyes_speed = levels.eyes_speed(level)
+    house_pace_speed = levels.house_pace_speed(level)
+    elroy1_speed = levels.elroy1_speed(level)
+    elroy2_speed = levels.elroy2_speed(level)
+
     corners = _corners(maze)
     ghosts: Dict[str, Ghost] = {}
     for name, start in maze.ghost_starts.items():
-        speed = config.BASE_GHOST_SPEED * multiplier
-        ghosts[name] = Ghost(name, start, corners[name], speed)
+        ghosts[name] = Ghost(
+            name,
+            start,
+            corners[name],
+            normal_speed,
+            frightened_speed=frightened_speed,
+            tunnel_speed=tunnel_speed,
+            eyes_speed=eyes_speed,
+            house_pace_speed=house_pace_speed,
+            elroy1_speed=elroy1_speed,
+            elroy2_speed=elroy2_speed,
+        )
     return ghosts
 
 
 class ScatterChaseClock:
-    """Advances through :data:`config.SCATTER_CHASE_TIMETABLE`.
+    """Advances through a per-level (phase, seconds) timetable (see
+    :func:`pacdawg.levels.scatter_chase_timetable_for_level`).
 
-    Frightened mode pauses this clock conceptually (callers simply stop
-    calling ``update`` while any ghost is frightened is *not* required --
-    the clock keeps running in the background as the real arcade genre
-    does, so a scatter/chase switch can still land while ghosts are blue).
+    Advancing this clock while any ghost is frightened is the caller's
+    responsibility to skip (Dossier Ch. 2: "the scatter/chase timer is
+    paused" during frightened mode, and resumes afterward) -- this class
+    only tracks elapsed time within whichever timetable it was given.
     """
 
-    def __init__(self, timetable: List[Tuple[str, float]] = None):
-        self.timetable = timetable or config.SCATTER_CHASE_TIMETABLE
+    def __init__(self, timetable: List[Tuple[str, float]]):
+        self.timetable = timetable
         self.index = 0
         self.elapsed = 0.0
 
@@ -369,15 +476,17 @@ class ScatterChaseClock:
 
 
 def apply_phase_change(ghosts: Dict[str, Ghost], phase: str) -> None:
-    """Reverse every actively-hunting ghost's direction on a phase flip.
+    """Flag every actively-hunting ghost for reversal on a scatter/chase
+    phase flip; frightened and eaten ghosts are left alone since they are
+    not participating in the scatter/chase rhythm.
 
-    This mirrors the arcade convention that scatter<->chase transitions
-    make ghosts instantly reverse course; frightened and eaten ghosts are
-    left alone since they are not participating in the scatter/chase
-    rhythm.
+    Per the documented rule, "reversal takes effect when the ghost next
+    enters a tile" -- not instantly mid-corridor -- so this only sets the
+    pending-reversal flag, consumed by the ghost's own on_center callback
+    the next time it actually arrives at a tile center.
     """
     new_mode = GhostMode.CHASE if phase == "chase" else GhostMode.SCATTER
     for ghost in ghosts.values():
         if ghost.mode in (GhostMode.SCATTER, GhostMode.CHASE):
             ghost.mode = new_mode
-            ghost._snap_and_reverse()
+            ghost._pending_reversal = True

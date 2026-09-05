@@ -39,6 +39,11 @@ DYING_SECONDS = 1.5
 LEVEL_CLEAR_SECONDS = 2.0
 COLLISION_DISTANCE_SQ = 0.36  # ~0.6 tiles: catches near-misses, not just exact overlap
 
+# Ghost-house release preference order (Dossier Ch. 2): only the single
+# most-preferred ghost still waiting inside accrues a dot counter at a
+# time. Gates (Blinky) is never part of this at all.
+HOUSE_RELEASE_ORDER = ("hunt", "wean", "doherty")
+
 
 class Game:
     """Owns all game state and advances it one frame at a time.
@@ -55,9 +60,9 @@ class Game:
         self.state_timer = 0.0
         self.score = ScoreBoard()
         self.maze: Maze = levels.build_maze(1)
-        self.player: Scotty = self._make_player(self.maze)
+        self.player: Scotty = self._make_player(self.maze, 1)
         self.ghosts: Dict[str, Ghost] = create_ghosts(self.maze, 1)
-        self.scatter_clock = ScatterChaseClock()
+        self.scatter_clock = ScatterChaseClock(levels.scatter_chase_timetable_for_level(1))
         self.fruit_active = False
         self.fruit_tile: Optional[Coord] = None
         self.fruit_timer = 0.0
@@ -65,6 +70,18 @@ class Game:
         self.life_elapsed = 0.0
         self.last_ghost_eaten_points: Optional[int] = None
         self.last_ghost_eaten_at: float = -999.0
+
+        # Ghost-house release bookkeeping (Dossier Ch. 2, "Home Sweet Home").
+        self.dot_counter_mode = "personal"  # or "global", after a life is lost
+        self._house_order_index = 0  # index into HOUSE_RELEASE_ORDER
+        self._house_dot_counter = 0
+        self._global_dot_counter = 0
+        self._time_since_last_pellet = 0.0
+
+        # Cruise Elroy (Gates/Blinky speed-up); unlocked means "allowed to
+        # activate" -- true from a fresh level, false after a life is lost
+        # until Doherty (the last-preference ghost) leaves the house again.
+        self.elroy_unlocked = True
 
         # pygame handles, created lazily by run()/init_display()
         self.screen = None
@@ -75,9 +92,9 @@ class Game:
 
     # -- setup helpers --------------------------------------------------------
     @staticmethod
-    def _make_player(maze: Maze) -> Scotty:
+    def _make_player(maze: Maze, level: int) -> Scotty:
         col, row = maze.player_start
-        return Scotty(col, row, config.BASE_PLAYER_SPEED)
+        return Scotty(col, row, levels.pacman_normal_speed(level))
 
     def new_game(self) -> None:
         self.score = ScoreBoard()
@@ -88,26 +105,41 @@ class Game:
     def _start_level(self, level: int) -> None:
         self.score.level = level
         self.maze = levels.build_maze(level)
-        self.player = self._make_player(self.maze)
-        speed_mult = levels.speed_multiplier_for_level(level)
-        self.player.speed = config.BASE_PLAYER_SPEED * speed_mult
+        self.player = self._make_player(self.maze, level)
         self.ghosts = create_ghosts(self.maze, level)
-        self.scatter_clock = ScatterChaseClock()
+        self.scatter_clock = ScatterChaseClock(levels.scatter_chase_timetable_for_level(level))
         self.fruit_active = False
         self.fruit_tile = None
         self.fruit_thresholds_hit = set()
         self.life_elapsed = 0.0
+        self.dot_counter_mode = "personal"
+        self._house_order_index = 0
+        self._house_dot_counter = 0
+        self._global_dot_counter = 0
+        self._time_since_last_pellet = 0.0
+        self.elroy_unlocked = True
 
     def _reset_positions_same_level(self) -> None:
         col, row = self.maze.player_start
         self.player.teleport(col, row, Direction.NONE)
+        self.player.speed = levels.pacman_normal_speed(self.score.level)
         for name, ghost in self.ghosts.items():
             start_col, start_row = self.maze.ghost_starts[name]
             ghost.teleport(start_col, start_row, Direction.NONE)
             ghost.mode = GhostMode.HOUSE
             ghost.released = False
-        self.scatter_clock = ScatterChaseClock()
+            ghost.elroy_stage = 0
+        self.scatter_clock = ScatterChaseClock(levels.scatter_chase_timetable_for_level(self.score.level))
         self.life_elapsed = 0.0
+        # A lost life switches release logic to the global dot counter
+        # (Dossier Ch. 2), and Cruise Elroy reverts until Doherty leaves
+        # the house again.
+        self.dot_counter_mode = "global"
+        self._house_order_index = 0
+        self._house_dot_counter = 0
+        self._global_dot_counter = 0
+        self._time_since_last_pellet = 0.0
+        self.elroy_unlocked = False
 
     # -- pure per-frame update --------------------------------------------------
     def update(self, dt: float, raw: RawInput) -> None:
@@ -158,17 +190,29 @@ class Game:
 
     def _update_playing(self, dt: float, raw: RawInput) -> None:
         self.life_elapsed += dt
+        self._time_since_last_pellet += dt
 
         direction = input_mod.resolve_direction(raw)
         if direction is not None:
             self.player.queue_direction(direction)
+        # Pac-Man is documented to move faster while frightened is active.
+        any_frightened = any(g.mode is GhostMode.FRIGHTENED for g in self.ghosts.values())
+        self.player.speed = (
+            levels.pacman_frightened_speed(self.score.level)
+            if any_frightened
+            else levels.pacman_normal_speed(self.score.level)
+        )
         self.player.update(self.maze, dt)
 
         self._release_ghosts_if_due()
+        self._update_cruise_elroy()
 
-        phase_changed = self.scatter_clock.update(dt)
-        if phase_changed:
-            apply_phase_change(self.ghosts, self.scatter_clock.phase)
+        # The scatter/chase timer is documented to pause entirely while
+        # any ghost is frightened, resuming once frightened mode ends.
+        if not any_frightened:
+            phase_changed = self.scatter_clock.update(dt)
+            if phase_changed:
+                apply_phase_change(self.ghosts, self.scatter_clock.phase)
 
         for ghost in self.ghosts.values():
             ghost.update(self.maze, dt, self.player, self.ghosts, self.scatter_clock.phase, self.rng)
@@ -182,37 +226,118 @@ class Game:
             self.state_timer = LEVEL_CLEAR_SECONDS
 
     def _release_ghosts_if_due(self) -> None:
-        for name, ghost in self.ghosts.items():
-            if ghost.mode is not GhostMode.HOUSE:
+        gates = self.ghosts.get("gates")
+        if gates is not None and gates.mode is GhostMode.HOUSE:
+            gates.release()  # Blinky/Gates is never subject to house-release logic
+
+        if self.dot_counter_mode == "personal":
+            self._release_via_personal_counter()
+        else:
+            self._release_via_global_counter()
+        self._release_via_timeout()
+
+    def _release_via_personal_counter(self) -> None:
+        while self._house_order_index < len(HOUSE_RELEASE_ORDER):
+            name = HOUSE_RELEASE_ORDER[self._house_order_index]
+            ghost = self.ghosts.get(name)
+            if ghost is None or ghost.mode is not GhostMode.HOUSE:
+                self._house_order_index += 1
+                self._house_dot_counter = 0
                 continue
-            delay = config.GHOST_RELEASE_DELAYS.get(name, 0.0)
-            pellet_threshold = config.GHOST_RELEASE_PELLET_COUNTS.get(name, 0)
-            if self.life_elapsed >= delay or self.maze.pellets_eaten >= pellet_threshold:
+            limit = levels.personal_dot_limit(self.score.level, name, self.maze.total_pellets)
+            if self._house_dot_counter >= limit:
                 ghost.release()
+                self._house_order_index += 1
+                self._house_dot_counter = 0
+                continue
+            break
+
+    def _release_via_global_counter(self) -> None:
+        for name in HOUSE_RELEASE_ORDER:
+            ghost = self.ghosts.get(name)
+            if ghost is None or ghost.mode is not GhostMode.HOUSE:
+                continue
+            threshold = levels.global_dot_counter_threshold(name, self.maze.total_pellets)
+            if self._global_dot_counter >= threshold:
+                ghost.release()
+                if name == "doherty":
+                    # Deactivates the global counter; personal counters
+                    # resume from here (Dossier Ch. 2).
+                    self.dot_counter_mode = "personal"
+                    self._house_order_index = len(HOUSE_RELEASE_ORDER)
+                    self._house_dot_counter = 0
+
+    def _release_via_timeout(self) -> None:
+        """Anti-starvation: force a release if Scotty stalls too long."""
+        timeout = levels.ghost_release_timeout_seconds(self.score.level)
+        if self._time_since_last_pellet < timeout:
+            return
+        for name in HOUSE_RELEASE_ORDER:
+            ghost = self.ghosts.get(name)
+            if ghost is not None and ghost.mode is GhostMode.HOUSE:
+                ghost.release()
+                break
+        self._time_since_last_pellet = 0.0
+
+    def _update_cruise_elroy(self) -> None:
+        """Gates (Blinky) speeds up as pellets run low, and once active
+        also targets Scotty directly during scatter (Dossier Ch. 4)."""
+        gates = self.ghosts.get("gates")
+        if gates is None:
+            return
+        if not self.elroy_unlocked:
+            doherty = self.ghosts.get("doherty")
+            if doherty is not None and doherty.released:
+                self.elroy_unlocked = True
+            else:
+                return
+        stage1, stage2 = levels.elroy_thresholds_for_level(self.score.level, self.maze.total_pellets)
+        remaining = self.maze.pellets_remaining
+        if remaining <= stage2:
+            gates.elroy_stage = 2
+        elif remaining <= stage1:
+            gates.elroy_stage = 1
 
     def _handle_pellets(self) -> None:
         col, row = self.player.tile
         eaten = self.maze.eat_at(col, row)
         if eaten == "pellet":
             self.score.add_pellet()
+            self.player.pause(config.DOT_EAT_PAUSE_SECONDS)
+            self._on_dot_eaten()
         elif eaten == "power":
             self.score.add_power_pellet()
+            self.player.pause(config.POWER_PELLET_EAT_PAUSE_SECONDS)
+            self._on_dot_eaten()
             seconds = levels.frightened_seconds_for_level(self.score.level)
+            flashes = levels.frightened_flashes_for_level(self.score.level)
             for ghost in self.ghosts.values():
-                ghost.frighten(seconds)
+                ghost.frighten(seconds, flashes)
 
-        for threshold in config.FRUIT_PELLET_THRESHOLDS:
+        first_trigger, second_trigger = levels.fruit_pellet_triggers(self.maze.total_pellets)
+        for threshold in (first_trigger, second_trigger):
             if threshold in self.fruit_thresholds_hit:
                 continue
             if self.maze.pellets_eaten >= threshold:
                 self.fruit_thresholds_hit.add(threshold)
                 self._spawn_fruit()
 
+    def _on_dot_eaten(self) -> None:
+        """Feed whichever ghost-house release counter is currently active,
+        and reset the anti-starvation timer (Dossier Ch. 2)."""
+        self._time_since_last_pellet = 0.0
+        if self.dot_counter_mode == "personal":
+            if self._house_order_index < len(HOUSE_RELEASE_ORDER):
+                self._house_dot_counter += 1
+        else:
+            self._global_dot_counter += 1
+
     def _spawn_fruit(self) -> None:
         exit_col, exit_row = self.maze.player_start
         self.fruit_tile = (exit_col, exit_row)
         self.fruit_active = True
-        self.fruit_timer = config.FRUIT_LIFETIME_SECONDS
+        low, high = config.FRUIT_LIFETIME_SECONDS_RANGE
+        self.fruit_timer = self.rng.uniform(low, high)
 
     def _handle_fruit(self, dt: float) -> None:
         if not self.fruit_active:

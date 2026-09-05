@@ -2,10 +2,18 @@
 
 This module has no rendering concerns and does not import pygame: it
 only knows about tile coordinates, directions, and the maze's walkability
-rules. Movement is resolved one tile-center at a time so turns only ever
-happen at junctions, matching the arcade maze-chase genre's feel, and a
-direction queued before reaching a junction is honored the instant the
-junction is reachable.
+rules.
+
+:class:`MovingActor` provides the base "turn only at an exact tile
+center" model used by ghosts (see :mod:`pacdawg.ghosts`): a direction is
+only reconsidered once the actor's position reaches a segment target
+exactly. :class:`Scotty` overrides movement with the documented arcade
+cornering/pre-turn model instead -- turns are re-evaluated every frame
+against Scotty's *current* tile, take effect immediately (no waiting for
+the center), and Scotty drifts diagonally toward the new lane's
+centerline while cornering. This asymmetry (ghosts center-only, Scotty
+pre-turn-and-corner) is deliberate and documented as the mechanical basis
+of the player's speed advantage; see ``pacman-reference.md`` sec. 7.
 """
 from __future__ import annotations
 
@@ -184,13 +192,133 @@ class MovingActor:
 
 
 class Scotty(MovingActor):
-    """The player character: a small, shaggy Scottish Terrier."""
+    """The player character: a small, shaggy Scottish Terrier.
+
+    Movement follows the documented arcade input/cornering model (see
+    ``pacman-reference.md`` sec. 7), which is deliberately *not* the same
+    algorithm ghosts use:
+
+    * The held direction is re-sampled every frame against the tile
+      Scotty's center currently occupies (``round(x, y)``) -- not just at
+      the exact tile center. A turn takes effect immediately, wherever
+      inside the tile he is, as soon as the adjacent tile in that
+      direction opens up. Because ``round()`` flips to the new tile up to
+      half a tile before the geometric center, this naturally reproduces
+      the documented "pre-turn" window with no timer of any kind.
+    * A wanted direction that is currently blocked simply isn't cleared;
+      it's re-tried every subsequent frame (a one-slot latch, not a timed
+      buffer), so it fires the instant a gap appears -- including while
+      Scotty is stopped dead against a wall.
+    * A 180-degree reversal is just a turn where the "adjacent tile" is
+      guaranteed open (it's the tile Scotty just came from), so it always
+      takes effect on the very next frame.
+    * While moving, Scotty also drifts up to one step per frame toward
+      the centerline of whichever axis he *isn't* currently traveling
+      along, cutting corners at an effective diagonal rather than
+      snapping onto the new lane. Ghosts get none of this: they may only
+      change direction exactly on a tile center (see Ghost/MovingActor),
+      which is the entire mechanical basis of Scotty's cornering
+      advantage over them.
+    """
 
     def __init__(self, col: int, row: int, speed: float):
         super().__init__(col, row, speed)
         self.facing = Direction.RIGHT  # last non-NONE direction, for animation
+        self.pause_timer = 0.0  # brief freeze after eating a (power) pellet
+
+    def pause(self, seconds: float) -> None:
+        """Freeze movement for a short spell, as when eating a dot."""
+        self.pause_timer = max(self.pause_timer, seconds)
 
     def update(self, maze: Maze, dt: float) -> None:
-        self.step(maze, dt, maze.can_player_enter)
+        if self.pause_timer > 0:
+            self.pause_timer = max(0.0, self.pause_timer - dt)
+            self._steer(maze)  # input still re-sampled during the freeze
+            return
+        self._steer(maze)
+        self._advance(maze, dt)
         if self.direction is not Direction.NONE:
             self.facing = self.direction
+
+    def _steer(self, maze: Maze) -> None:
+        """Re-sample the held direction every frame against the *current*
+        tile (not the exact center) -- the documented pre-turn model."""
+        can_enter = maze.can_player_enter
+        col, row = round(self.x), round(self.y)
+        wanted = self.queued_direction
+        if wanted is not Direction.NONE and wanted is not self.direction:
+            if self._can_step(maze, col, row, wanted, can_enter):
+                self._begin_direction(maze, wanted, col, row)
+
+    def _begin_direction(self, maze: Maze, direction: Direction, col: int, row: int) -> None:
+        self.direction = direction
+        dx, dy = direction.vector
+        ncol, nrow = col + dx, row + dy
+        if maze.is_tunnel_row(row):
+            ncol = maze.wrap_col(ncol)
+        # Only the axis of travel needs a fresh segment target; the other
+        # axis keeps drifting toward its own centerline in _advance(),
+        # which is what produces the cornering cut when a turn is taken
+        # before Scotty is fully aligned with the new lane.
+        if dx != 0:
+            self._target_x = float(ncol)
+        else:
+            self._target_y = float(nrow)
+
+    def _advance(self, maze: Maze, dt: float) -> None:
+        if self.direction is Direction.NONE:
+            return
+        can_enter = maze.can_player_enter
+        remaining = self.speed * dt
+        guard = 0
+        while remaining > _EPSILON and guard < 8:
+            guard += 1
+            dx, dy = self.direction.vector
+            if dx != 0:
+                primary_attr, target_attr, perp_attr = "x", "_target_x", "y"
+            else:
+                primary_attr, target_attr, perp_attr = "y", "_target_y", "x"
+
+            primary_value = getattr(self, primary_attr)
+            target_value = getattr(self, target_attr)
+            primary_distance = abs(target_value - primary_value)
+
+            if primary_distance < _EPSILON:
+                # Arrived at the next tile boundary on the axis of travel:
+                # snap, then decide whether continuing is still legal.
+                setattr(self, primary_attr, target_value)
+                col, row = round(self.x), round(self.y)
+                if not self._can_step(maze, col, row, self.direction, can_enter):
+                    self.direction = Direction.NONE
+                    break
+                ndx, ndy = self.direction.vector
+                ncol, nrow = col + ndx, row + ndy
+                if maze.is_tunnel_row(row):
+                    ncol = maze.wrap_col(ncol)
+                setattr(self, target_attr, float(ncol if ndx != 0 else nrow))
+                target_value = getattr(self, target_attr)
+                primary_value = getattr(self, primary_attr)
+                primary_distance = abs(target_value - primary_value)
+                if primary_distance < _EPSILON:
+                    break  # no legal move from here; stay put this frame
+
+            travel = min(remaining, primary_distance)
+            sign = 1.0 if target_value >= primary_value else -1.0
+            setattr(self, primary_attr, primary_value + sign * travel)
+            remaining -= travel
+
+            # Cornering: drift the perpendicular axis toward its own
+            # centerline by up to the same distance just traveled.
+            perp_value = getattr(self, perp_attr)
+            center = float(round(perp_value))
+            drift = min(travel, abs(center - perp_value))
+            if perp_value < center:
+                setattr(self, perp_attr, perp_value + drift)
+            elif perp_value > center:
+                setattr(self, perp_attr, perp_value - drift)
+
+            if maze.is_tunnel_row(round(self.y)):
+                if self.x < 0:
+                    self.x += maze.cols
+                elif self.x >= maze.cols:
+                    self.x -= maze.cols

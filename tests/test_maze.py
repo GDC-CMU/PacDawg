@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 
 from pacdawg.maze import Maze, MazeError
-from pacdawg import levels
+from pacdawg import config, levels
 
 
 def _minimal_layout():
@@ -143,10 +143,13 @@ class AuthoredLevelTests(unittest.TestCase):
         maze2 = levels.build_maze(1)
         self.assertEqual(maze2.pellets_eaten, 0)
 
-    def test_speed_multiplier_clamps_beyond_table(self):
+    def test_speed_clamps_to_band_21_plus_beyond_the_table(self):
+        # Level 999 should behave exactly like level 21 (Dossier's "21+"
+        # band): 90% Pac-Man speed, 95% ghost speed.
         far_level = 999
-        table = levels.config.LEVEL_SPEED_MULTIPLIERS
-        self.assertEqual(levels.speed_multiplier_for_level(far_level), table[-1])
+        self.assertEqual(levels.pacman_normal_speed(far_level), levels.pacman_normal_speed(21))
+        self.assertEqual(levels.ghost_normal_speed(far_level), levels.ghost_normal_speed(21))
+        self.assertAlmostEqual(levels.pacman_normal_speed(21), config.BASE_SPEED_TILES_PER_SEC * 0.9)
 
 
 if __name__ == "__main__":
