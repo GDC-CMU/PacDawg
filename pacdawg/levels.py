@@ -187,9 +187,17 @@ def house_pace_speed(level: int) -> float:
 
 
 # --- Scatter / chase timetable ---------------------------------------------------
-def scatter_chase_timetable_for_level(level: int) -> List[Tuple[str, float]]:
-    """The (phase, seconds) timetable for a level (Dossier Ch. 2), ending
-    in an effectively endless final chase."""
+def documented_scatter_chase_timetable_for_level(level: int) -> List[Tuple[str, float]]:
+    """The literal Dossier-documented (phase, seconds) timetable for a
+    level (Ch. 2), always opening in scatter, ending in an effectively
+    endless final chase.
+
+    Most callers want :func:`scatter_chase_timetable_for_level` instead,
+    which applies the arcade-fair opening override (config.OPEN_IN_CHASE)
+    on top of this. This function exists so the documented table itself
+    stays directly available and pinned by its own tests, even though the
+    game does not use it unmodified by default.
+    """
     level = max(level, 1)
     if level == 1:
         durations = config.SCATTER_CHASE_SECONDS_BY_BAND[1]
@@ -201,6 +209,28 @@ def scatter_chase_timetable_for_level(level: int) -> List[Tuple[str, float]]:
     timetable = list(zip(phases, durations))
     timetable.append(("chase", 1_000_000.0))  # indefinite final chase
     return timetable
+
+
+def scatter_chase_timetable_for_level(level: int) -> List[Tuple[str, float]]:
+    """The (phase, seconds) timetable actually used by the game: the
+    documented table with the arcade-fair opening override applied (see
+    config.OPEN_IN_CHASE) -- every phase *after* the opening burst keeps
+    its documented duration."""
+    timetable = documented_scatter_chase_timetable_for_level(level)
+    if config.OPEN_IN_CHASE:
+        timetable = _apply_opening_chase_override(timetable)
+    return timetable
+
+
+def _apply_opening_chase_override(
+    timetable: List[Tuple[str, float]]
+) -> List[Tuple[str, float]]:
+    override = config.OPENING_SCATTER_OVERRIDE_SECONDS
+    if override <= 0.0:
+        # Skip the opening scatter burst entirely: ghosts leave the house
+        # straight into the timetable's first chase burst.
+        return timetable[1:]
+    return [("scatter", override)] + timetable[1:]
 
 
 # --- Frightened duration / flashing ------------------------------------------------

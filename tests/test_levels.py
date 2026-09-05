@@ -47,30 +47,72 @@ class BaseSpeedTests(unittest.TestCase):
         self.assertLess(levels.ghost_tunnel_speed(1), levels.ghost_normal_speed(1))
 
 
-class ScatterChaseTimetableTests(unittest.TestCase):
+class DocumentedScatterChaseTimetableTests(unittest.TestCase):
+    """Pins the literal Dossier table, independent of the arcade-fair
+    opening override the game actually plays with (see
+    ScatterChaseOpeningOverrideTests below)."""
+
     def test_level_1_matches_the_documented_absolute_timeline(self):
-        table = levels.scatter_chase_timetable_for_level(1)
+        table = levels.documented_scatter_chase_timetable_for_level(1)
         self.assertEqual(
             [d for _, d in table[:7]],
             [7.0, 20.0, 7.0, 20.0, 5.0, 20.0, 5.0],
         )
+        self.assertEqual(table[0], ("scatter", 7.0))  # documented: opens in scatter
         self.assertEqual(table[7][0], "chase")
         self.assertGreater(table[7][1], 3600)  # effectively indefinite
 
     def test_levels_2_to_4_balloon_the_third_chase(self):
-        table = levels.scatter_chase_timetable_for_level(3)
+        table = levels.documented_scatter_chase_timetable_for_level(3)
         self.assertEqual(table[5], ("chase", 1033.0))
         self.assertAlmostEqual(table[6][1], 1.0 / 60.0)
 
     def test_level_5_plus_uses_1037_and_shorter_scatters(self):
-        table = levels.scatter_chase_timetable_for_level(10)
+        table = levels.documented_scatter_chase_timetable_for_level(10)
         self.assertEqual(table[0], ("scatter", 5.0))
         self.assertEqual(table[5], ("chase", 1037.0))
 
     def test_phases_alternate_scatter_and_chase(self):
-        table = levels.scatter_chase_timetable_for_level(1)
+        table = levels.documented_scatter_chase_timetable_for_level(1)
         for i, (phase, _) in enumerate(table):
             self.assertEqual(phase, "scatter" if i % 2 == 0 else "chase")
+
+
+class ScatterChaseOpeningOverrideTests(unittest.TestCase):
+    """The table the game actually plays with: a deliberate, documented
+    deviation from the Dossier so ghosts engage from the start on a
+    club-fair cabinet, instead of spending the first ~10s of a 30-60s
+    session orbiting corners with no threat (see config.OPEN_IN_CHASE)."""
+
+    def test_default_config_opens_in_chase(self):
+        self.assertTrue(config.OPEN_IN_CHASE)
+        self.assertLessEqual(config.OPENING_SCATTER_OVERRIDE_SECONDS, 0.0)
+
+    def test_level_1_opens_directly_in_chase_not_scatter(self):
+        table = levels.scatter_chase_timetable_for_level(1)
+        self.assertEqual(table[0][0], "chase")
+        self.assertEqual(table[0][1], 20.0)  # the documented table's *second* entry
+
+    def test_later_phases_keep_their_documented_durations(self):
+        documented = levels.documented_scatter_chase_timetable_for_level(1)
+        overridden = levels.scatter_chase_timetable_for_level(1)
+        # Everything after the removed opening scatter burst is untouched.
+        self.assertEqual(overridden, documented[1:])
+
+    def test_override_still_applies_across_bands(self):
+        for level in (1, 3, 10):
+            with self.subTest(level=level):
+                table = levels.scatter_chase_timetable_for_level(level)
+                self.assertEqual(table[0][0], "chase")
+
+    def test_documented_table_is_unchanged_by_the_override(self):
+        # The override must never mutate or replace the source-of-truth
+        # documented table.
+        before = levels.documented_scatter_chase_timetable_for_level(1)
+        levels.scatter_chase_timetable_for_level(1)
+        after = levels.documented_scatter_chase_timetable_for_level(1)
+        self.assertEqual(before, after)
+        self.assertEqual(after[0], ("scatter", 7.0))
 
 
 class FrightenedTableTests(unittest.TestCase):

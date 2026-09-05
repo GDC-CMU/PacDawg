@@ -76,6 +76,29 @@ SCATTER_CHASE_SECONDS_BY_BAND = {
     "5+": (5.0, 20.0, 5.0, 20.0, 5.0, 1037.0, 1.0 / 60.0),
 }
 
+# --- Arcade-fair opening override (DELIBERATE DEVIATION from the Dossier) -------
+# The documented table above always opens a level/life in scatter (7s on
+# level 1). That is faithful to the original, but this is a club-fair
+# cabinet where a visitor typically plays for 30-60 seconds total --
+# spending the first third of that watching ghosts walk to their corners
+# and orbit there, with no threat, reads as broken AI rather than
+# authentic pacing. We deliberately open every level/life in CHASE
+# instead; the documented table itself (SCATTER_CHASE_SECONDS_BY_BAND) is
+# left untouched, and every *later* scatter/chase phase in the cycle
+# keeps its documented duration -- only the opening burst is overridden.
+# See levels.scatter_chase_timetable_for_level(), which applies this, and
+# levels.documented_scatter_chase_timetable_for_level(), which does not.
+#
+# To restore the authentic Dossier opening (scatter first, for the
+# documented duration), set OPEN_IN_CHASE = False.
+OPEN_IN_CHASE = True
+# When OPEN_IN_CHASE is True, the opening scatter burst's documented
+# duration is replaced with this many seconds before falling through to
+# the rest of the documented timetable. 0.0 skips the opening scatter
+# burst entirely (ghosts leave the house straight into chase); a small
+# positive value keeps a brief opening scatter instead of removing it.
+OPENING_SCATTER_OVERRIDE_SECONDS = 0.0
+
 # --- Frightened duration & flash count, per level (Dossier Table A.1) -----------
 # Deliberately non-monotonic (levels 6, 10, and 14 jump back up) -- this is
 # real, confirmed independently by two clones, not a transcription error.
@@ -178,3 +201,16 @@ EXIT_BUTTONS = (BUTTON_P1,)
 JOYSTICK_AXIS_X = 0
 JOYSTICK_AXIS_Y = 1
 JOYSTICK_DEADZONE = 0.5
+
+# The ArcadeLauncher's gallery selects a game with button 1 (A) or Enter,
+# then tears down its own SDL and spawns us while that button may still be
+# physically held. SDL surfaces the still-held button to us as soon as we
+# initialize joysticks/keyboard, which an edge-triggered menu would read as
+# a brand-new press and instantly confirm START GAME before the visitor
+# ever sees the menu. Game.init_display() seeds pressed-state from the
+# real hardware at startup (so a held button must be released once before
+# it counts as fresh) -- this settle window is a belt-and-braces second
+# layer that additionally ignores menu confirm/select for a brief moment
+# after startup, in case anything slips past the seeding. It intentionally
+# does NOT apply to the P1 exit contract, which must remain immediate.
+INPUT_SETTLE_SECONDS = 0.3

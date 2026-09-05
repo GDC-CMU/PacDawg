@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 import unittest
 
-from pacdawg import levels
+from pacdawg import config, levels
 from pacdawg.game import Game, GameState, MENU_ITEMS, MENU_EXIT_TO_GALLERY, MENU_HOW_TO_PLAY, MENU_START_GAME
 from pacdawg.ghosts import GhostMode
 from pacdawg.input import RawInput
@@ -132,6 +132,39 @@ class CruiseElroyTests(unittest.TestCase):
         self.assertTrue(game.elroy_unlocked)
 
 
+class OpeningEngagesImmediatelyTests(unittest.TestCase):
+    """Regression tests for the arcade-fair opening override: a level (and
+    a life respawn) must begin in CHASE, not scatter, so ghosts engage
+    the player almost as soon as they leave the house instead of walking
+    to a corner and orbiting it for the first ~10 seconds."""
+
+    def test_level_start_ghosts_reach_chase_within_a_couple_seconds_of_leaving(self):
+        game = Game(rng=random.Random(20))
+        game.new_game()
+        saw_scatter = False
+        reached_chase_by = None
+        for frame in range(600):  # 10 simulated seconds
+            game.update(1 / 60.0, RawInput())
+            active = [g for g in game.ghosts.values() if g.mode is not GhostMode.HOUSE]
+            if any(g.mode is GhostMode.SCATTER for g in active):
+                saw_scatter = True
+            if reached_chase_by is None and active and all(
+                g.mode is GhostMode.CHASE for g in active if g.mode is not GhostMode.LEAVING
+            ):
+                reached_chase_by = frame
+        self.assertFalse(saw_scatter, "a ghost scattered during the opening burst")
+        self.assertIsNotNone(reached_chase_by)
+        self.assertLess(reached_chase_by / 60.0, 4.0)
+
+    def test_life_respawn_also_opens_in_chase(self):
+        game = Game(rng=random.Random(21))
+        game.new_game()
+        game._reset_positions_same_level()
+        table = levels.scatter_chase_timetable_for_level(game.score.level)
+        self.assertEqual(table[0][0], "chase")
+        self.assertEqual(game.scatter_clock.timetable[0][0], "chase")
+
+
 class ScatterChasePauseTests(unittest.TestCase):
     def test_scatter_chase_timer_pauses_while_any_ghost_is_frightened(self):
         game = Game(rng=random.Random(5))
@@ -228,6 +261,67 @@ class MainMenuTests(unittest.TestCase):
         game.state = GameState.GAME_OVER
         game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(game.state, GameState.ATTRACT)
+
+
+class HeldButtonAtStartupTests(unittest.TestCase):
+    """Regression tests for the "launched from the gallery with the
+    select button still held" bug: the ArcadeLauncher's gallery is left
+    with button 1/A (or Enter) physically held down -- that is how the
+    visitor selected PacDawg -- and our first hardware read must not
+    mistake that stale, already-held button for a fresh press, or the
+    menu confirms START GAME before the visitor ever sees it.
+
+    Game.init_display() reproduces this by seeding pressed state from
+    real hardware; _seed_input_state() is the pure, testable half of
+    that (no real display/joystick needed) so we can simulate "already
+    held at startup" directly.
+    """
+
+    def test_button_a_held_at_startup_does_not_auto_start(self):
+        game = Game(rng=random.Random(30))
+        game._seed_input_state(set(), {config.BUTTON_A})
+        held = RawInput(pressed_buttons=frozenset({config.BUTTON_A}))
+        for _ in range(40):  # well past both the settle window and a bounce
+            game.update(1 / 60.0, held)
+        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_START_GAME)
+
+    def test_enter_key_held_at_startup_does_not_auto_start(self):
+        game = Game(rng=random.Random(31))
+        game._seed_input_state({"return"}, set())
+        held = RawInput(pressed_keys=frozenset({"return"}))
+        for _ in range(40):
+            game.update(1 / 60.0, held)
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_release_then_genuine_press_after_seeded_hold_still_starts(self):
+        game = Game(rng=random.Random(32))
+        game._seed_input_state(set(), {config.BUTTON_A})
+        held = RawInput(pressed_buttons=frozenset({config.BUTTON_A}))
+        for _ in range(40):
+            game.update(1 / 60.0, held)
+        game.update(1 / 60.0, RawInput())  # visitor releases the stale button
+        game.update(1 / 60.0, held)  # then genuinely presses it again
+        self.assertNotEqual(game.state, GameState.ATTRACT)
+
+    def test_p1_held_at_startup_does_not_instantly_exit(self):
+        game = Game(rng=random.Random(33))
+        game._seed_input_state(set(), {config.BUTTON_P1})
+        held = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
+        for _ in range(40):
+            game.maybe_exit(held)  # must not raise SystemExit
+        # But once genuinely (re-)pressed after being seen released, P1
+        # must still exit immediately -- the guard must not eat it.
+        game.maybe_exit(RawInput())
+        with self.assertRaises(SystemExit) as cm:
+            game.maybe_exit(held)
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_p1_not_held_at_startup_still_exits_immediately(self):
+        game = Game(rng=random.Random(34))
+        game._seed_input_state(set(), set())
+        with self.assertRaises(SystemExit):
+            game.maybe_exit(RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
 
 
 if __name__ == "__main__":

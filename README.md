@@ -128,6 +128,20 @@ Button 5 (P1) exits via `sys.exit(0)` immediately, from any state, which
 is the documented contract the launcher relies on to return the visitor
 to its gallery.
 
+The gallery is left with its own select button (button 1/A, or Enter)
+still physically held down -- that's how the visitor picked PacDawg --
+and our process can see that held state the instant we open the
+joystick/keyboard. `Game.init_display()` flushes any queued startup
+events and then seeds our pressed-button/key tracking directly from live
+hardware state, so an already-held control must be released once before
+it can register as a fresh press; a short settle window
+(`config.INPUT_SETTLE_SECONDS`) additionally ignores menu confirm for a
+moment at startup as a second layer of defense. None of this ever
+delays or suppresses the P1 exit path, which stays an immediate,
+level-triggered check -- it only guards against a P1 that happens to
+already be held at process start being misread as an instant, unwanted
+exit.
+
 ## Swapping in real art
 
 The client's brief was explicit: gameplay art must come from PNG files,
@@ -232,6 +246,20 @@ phases on a per-level timetable that pauses while any ghost is
 frightened, turn frightened (and eventually flash a warning) after a
 power pellet, and become eyes-only when eaten, racing back into the
 house to their own home tile before rejoining the chase.
+
+The documented Dossier timetable always opens each level with several
+seconds of scatter before the first chase. On a real cabinet, where a
+visitor plays for maybe 30-60 seconds, spending the first third of that
+watching ghosts circle their corners with no threat reads as broken AI
+rather than faithful pacing. `levels.py` keeps the full documented
+timetable available (`documented_scatter_chase_timetable_for_level`,
+still pinned by tests) but the game actually plays with
+`scatter_chase_timetable_for_level`, which applies
+`config.OPEN_IN_CHASE` to drop the opening scatter burst so ghosts
+engage from the moment they leave the house; every phase after that
+still runs for its documented duration. This is a deliberate,
+club-fair deviation from the source material, not an authenticity bug --
+set `config.OPEN_IN_CHASE = False` to restore the original opening.
 
 Scatter corners are placed just outside the maze, in unreachable dead
 space -- the same trick the original uses -- so a ghost patrols and

@@ -441,5 +441,47 @@ class ScatterPatrolTests(unittest.TestCase):
         self.assertGreater(len(visited), 5)
 
 
+class GatesHuntSymmetryTests(unittest.TestCase):
+    """Client report: Gates and Hunt reported *identical* distance-to-corner
+    at every sample during an early trace (30/30, 20/20, 9/9, ...), which
+    looked suspicious -- two ghosts with different personalities moving in
+    perfect lockstep would halve the apparent threat.
+
+    Traced empirically: with a *stationary* player, Gates targets the
+    player's exact tile and Hunt targets 4 tiles ahead of the player's
+    facing, which (with no facing/no movement) collapses onto the same
+    tile Gates targets; combined with both ghosts having zero release
+    delay, equal speed and left-right mirrored corners/start tiles, they
+    move as exact mirror images of one another -- not stacked on the same
+    tile. This test pins that: they stay on different tiles throughout,
+    but their x-coordinates sum to a constant (mirrored across the maze's
+    vertical centerline) and their y-coordinates match.
+    """
+
+    def test_gates_and_hunt_are_mirror_images_during_scatter_not_stacked(self):
+        maze = levels.build_maze(1)
+        player = Scotty(*maze.player_start, levels.pacman_normal_speed(1))
+        ghosts = create_ghosts(maze, level=1)
+        rng = random.Random(42)
+        for ghost in ghosts.values():
+            ghost.release()
+            ghost.mode = GhostMode.SCATTER
+
+        gates, hunt = ghosts["gates"], ghosts["hunt"]
+        same_tile_frames = 0
+        for _ in range(600):  # 10 simulated seconds
+            for name, ghost in ghosts.items():
+                ghost.update(maze, 1 / 60.0, player, ghosts, "scatter", rng)
+            if gates.tile == hunt.tile:
+                same_tile_frames += 1
+            self.assertAlmostEqual(gates.x + hunt.x, maze.cols - 1, delta=0.05)
+            self.assertAlmostEqual(gates.y, hunt.y, delta=0.05)
+
+        # They briefly share the single house-exit doorway tile while both
+        # converge on it just after release, but must not stay stacked --
+        # the rest of the run they're on distinct (mirrored) tiles.
+        self.assertLess(same_tile_frames, 30, "gates and hunt stayed stacked on one tile")
+
+
 if __name__ == "__main__":
     unittest.main()

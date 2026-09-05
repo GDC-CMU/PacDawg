@@ -102,6 +102,15 @@ class Game:
         self.pressed_keys: Set[str] = set()
         self.pressed_buttons: Set[int] = set()
 
+        # Startup input-residue guard (see config.INPUT_SETTLE_SECONDS):
+        # the gallery may hand us a still-held select button, so confirm
+        # is ignored for a short settle window, and the P1 exit contract
+        # is "armed" only once any stale, already-held exit input has been
+        # observed released at least once. Both default to "clean start"
+        # here; init_display() re-derives them from real hardware state.
+        self._input_settle_remaining = 0.0
+        self._exit_armed = True
+
     # -- setup helpers --------------------------------------------------------
     @staticmethod
     def _make_player(maze: Maze, level: int) -> Scotty:
@@ -155,6 +164,9 @@ class Game:
 
     # -- pure per-frame update --------------------------------------------------
     def update(self, dt: float, raw: RawInput) -> None:
+        if self._input_settle_remaining > 0.0:
+            self._input_settle_remaining = max(0.0, self._input_settle_remaining - dt)
+
         if self.state is GameState.ATTRACT:
             self._update_menu(raw)
             return
@@ -227,9 +239,17 @@ class Game:
     def _menu_confirm_pressed(self, raw: RawInput) -> bool:
         """Edge-triggered confirm: fires only the frame confirm is newly
         held, so a single button press can't chain through multiple menu
-        transitions (e.g. GAME_OVER -> ATTRACT -> START GAME) in one go."""
+        transitions (e.g. GAME_OVER -> ATTRACT -> START GAME) in one go.
+
+        Belt-and-braces: also ignored entirely during the brief startup
+        settle window (config.INPUT_SETTLE_SECONDS), on top of the
+        hardware-state seeding done in init_display(). We still track
+        ``_menu_last_confirm`` while settling so a button held through the
+        whole window is not misread as a fresh press the instant it ends.
+        """
         current = input_mod.wants_confirm(raw)
-        pressed = current and not self._menu_last_confirm
+        settling = self._input_settle_remaining > 0.0
+        pressed = current and not self._menu_last_confirm and not settling
         self._menu_last_confirm = current
         return pressed
 
@@ -437,8 +457,24 @@ class Game:
 
     # -- exit contract ------------------------------------------------------------
     def maybe_exit(self, raw: RawInput) -> None:
-        """P1 (button 5) or Esc must exit immediately, from any state."""
-        if input_mod.wants_exit(raw):
+        """P1 (button 5) or Esc must exit immediately, from any state.
+
+        Guarded against a P1 (or Esc) held over from process startup (see
+        init_display()): if exit input was already active the moment we
+        started, it must be observed released at least once before it can
+        trigger an exit -- otherwise a stale held button handed to us by
+        the launcher would instantly quit us right back out. Once armed
+        (the common case: nothing was held at startup), this check is a
+        plain, immediate, level-triggered read exactly per the documented
+        contract -- a genuine press-and-hold exits without delay, and
+        nothing here ever suppresses or delays a real P1 press.
+        """
+        active = input_mod.wants_exit(raw)
+        if not self._exit_armed:
+            if not active:
+                self._exit_armed = True
+            return
+        if active:
             self._exit_to_gallery()
 
     def _exit_to_gallery(self) -> None:
@@ -460,6 +496,69 @@ class Game:
         pygame.joystick.init()
         for i in range(pygame.joystick.get_count()):
             self._add_joystick(i)
+        # The gallery is left with button 1/A (or Enter) still physically
+        # held -- it is how the visitor *selected* PacDawg -- and SDL can
+        # surface that held state to us the instant we open the
+        # joystick/keyboard (as a synthetic "just pressed" event or as
+        # live device state). Flush anything already queued, then seed our
+        # own pressed-state from the real hardware so that held control
+        # must be released once before it counts as a fresh press, no
+        # matter which of those two ways it would otherwise reach us.
+        pygame.event.clear()
+        self._seed_input_state_from_hardware()
+
+    def _seed_input_state_from_hardware(self) -> None:
+        """Prime pressed_keys/pressed_buttons (and the menu's edge- and
+        exit-arming latches) from what is *actually* physically held right
+        now, instead of an empty set. See init_display()."""
+        pressed_keys = set()
+        try:
+            keys = pygame.key.get_pressed()
+            for key_const in range(len(keys)):
+                if keys[key_const]:
+                    pressed_keys.add(pygame.key.name(key_const))
+        except Exception:
+            pass  # headless/dummy video driver may not support key state
+        pressed_buttons = set()
+        for joy in self.joysticks.values():
+            try:
+                for button in range(joy.get_numbuttons()):
+                    if joy.get_button(button):
+                        pressed_buttons.add(button)
+            except pygame.error:
+                continue  # device vanished mid-enumeration; ignore
+        self._seed_input_state(pressed_keys, pressed_buttons)
+
+    def _seed_input_state(self, pressed_keys, pressed_buttons) -> None:
+        """Prime our tracked pressed-state and the startup guards from an
+        explicit already-held set. Split out from
+        _seed_input_state_from_hardware() so the "launched with a button
+        already held" scenario is directly testable without a real
+        display or joystick device.
+        """
+        self.pressed_keys = set(pressed_keys)
+        self.pressed_buttons = set(pressed_buttons)
+        seeded = RawInput(
+            axes=self._read_axes(),
+            pressed_keys=frozenset(self.pressed_keys),
+            pressed_buttons=frozenset(self.pressed_buttons),
+        )
+        self._menu_last_confirm = input_mod.wants_confirm(seeded)
+        self._menu_last_direction = input_mod.resolve_direction(seeded)
+        self._exit_armed = not input_mod.wants_exit(seeded)
+        self._input_settle_remaining = config.INPUT_SETTLE_SECONDS
+
+    def _read_axes(self) -> tuple:
+        axes = []
+        for joy in self.joysticks.values():
+            try:
+                if joy.get_numaxes() >= 2:
+                    axes.append(
+                        (joy.get_axis(config.JOYSTICK_AXIS_X), joy.get_axis(config.JOYSTICK_AXIS_Y))
+                    )
+            except pygame.error:
+                continue  # disconnected mid-frame; skip it this frame
+        return tuple(axes)
 
     def _add_joystick(self, device_index: int) -> None:
         try:
@@ -487,18 +586,8 @@ class Game:
             elif event.type == pygame.JOYDEVICEREMOVED:
                 self.joysticks.pop(event.instance_id, None)
 
-        axes = []
-        for joy in self.joysticks.values():
-            try:
-                if joy.get_numaxes() >= 2:
-                    axes.append(
-                        (joy.get_axis(config.JOYSTICK_AXIS_X), joy.get_axis(config.JOYSTICK_AXIS_Y))
-                    )
-            except pygame.error:
-                continue  # disconnected mid-frame; skip it this frame
-
         return RawInput(
-            axes=tuple(axes),
+            axes=self._read_axes(),
             pressed_keys=frozenset(self.pressed_keys),
             pressed_buttons=frozenset(self.pressed_buttons),
         )
