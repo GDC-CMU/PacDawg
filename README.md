@@ -150,6 +150,53 @@ Scotty is caught, or the demo maze is somehow cleared, the demo simply
 restarts from a fresh level rather than draining lives into a
 game-over or advancing forever, so a long-running demo stays bounded.
 
+## Launcher gallery preview
+
+`assets/preview/` is a small, pre-rendered looping animation the
+ArcadeLauncher's own gallery attract mode plays *inside this game's
+card* when the cabinet idles -- a cross-repo contract, since the
+launcher runs games as separate processes and can't drive another
+game's loop itself. It contains:
+
+```
+assets/preview/manifest.json     {"version": 1, "fps": 8, "frames": [...]}
+assets/preview/frame_000.png
+assets/preview/frame_001.png
+...
+```
+
+Frames are small (200x150 -- the launcher scales up with
+nearest-neighbour, so pixel art stays crisp) and few (a 1-3 second
+loop). The launcher never writes into a game's checkout and treats a
+missing or malformed preview as a harmless fallback to procedural
+card art, never a crash.
+
+Regenerate it with:
+
+```
+python tools/generate_preview.py
+```
+
+The generator drives PacDawg's actual attract-mode demo headlessly
+through the real render path (`render.draw_frame`) -- the same systems
+described above, not a separate faked-up scene -- captures a handful
+of frames at a chosen moment where the ghosts are visibly hunting
+nearby, and downsamples them to card size. The DEMO tag and PACDAWG
+title overlay are deliberately suppressed for these captures (see
+`_render_clean_frame` in the tool): they're useful in-game context but
+redundant clutter inside a card that already names the game.
+
+It's fully deterministic -- rerunning it leaves `git status` clean --
+via a fixed RNG seed, a fixed simulated frame delta (never real
+elapsed time), and a synthetic clock substituted for
+`pygame.time.get_ticks()` so walk-cycle animation timing can't vary
+between runs either. The manifest lists the captured frames forward
+then backward (a "ping-pong" sequence) rather than looping straight
+back to frame 0, so the loop never jump-cuts: since the demo is
+continuously moving, every step in that sequence -- including the
+wrap from the last entry back to the first -- is a real, adjacent pair
+from the same continuous capture.
+
 ## Running locally
 
 Requires Python 3.10+ and `pygame-ce`.
@@ -283,8 +330,10 @@ pacdawg/
   assets.py              the single point of PNG access (see assets/README.md)
   render.py              draws only from assets.py surfaces, plus HUD text
 tools/generate_placeholders.py
+tools/generate_preview.py    regenerates assets/preview/ (see Launcher gallery preview)
 tests/
 docs/screenshots/
+assets/preview/               launcher gallery card animation (see Launcher gallery preview)
 ```
 
 Only `game.py`, `render.py`, and `assets.py` import `pygame`; every other
