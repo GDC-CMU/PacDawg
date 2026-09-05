@@ -8,14 +8,28 @@ stays testable without a display.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # --- Screen / arcade cabinet -------------------------------------------------
-# The cabinet's display is fixed at 800x600; the launcher does not resize us.
+# The game always renders at this logical size; pygame.SCALED then letterboxes
+# it onto whatever panel is actually fitted, so the cabinet and any laptop both
+# get a correct picture without the game knowing the display size.
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
 WINDOW_TITLE = "PacDawg"
+
+#: Set this to run in a window instead of fullscreen. Fullscreen is the default
+#: because that is how the cabinet is played; developing on a laptop against a
+#: fullscreen window is painful, hence the escape hatch.
+ENV_WINDOWED = "PACDAWG_WINDOWED"
+
+
+def windowed_requested() -> bool:
+    """Whether ``PACDAWG_WINDOWED`` asks for a window rather than fullscreen."""
+    raw = os.environ.get(ENV_WINDOWED, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 # --- Maze geometry ------------------------------------------------------------
 TILE_SIZE = 20

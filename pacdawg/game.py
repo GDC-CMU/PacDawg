@@ -668,7 +668,17 @@ class Game:
     def init_display(self) -> None:
         pygame.init()
         pygame.display.set_caption(config.WINDOW_TITLE)
-        self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
+        # SCALED keeps the game rendering at its logical 800x600 while SDL
+        # letterboxes that onto whatever panel is fitted, so the cabinet and a
+        # laptop of any resolution both get a correct picture. FULLSCREEN is the
+        # default because that is how the cabinet is played; PACDAWG_WINDOWED
+        # gives a window for development.
+        flags = pygame.SCALED
+        if not config.windowed_requested():
+            flags |= pygame.FULLSCREEN
+        self.screen = pygame.display.set_mode(
+            (config.SCREEN_WIDTH, config.SCREEN_HEIGHT), flags
+        )
         self.clock = pygame.time.Clock()
         pygame.joystick.init()
         for i in range(pygame.joystick.get_count()):

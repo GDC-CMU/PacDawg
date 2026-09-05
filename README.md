@@ -206,6 +206,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
+The game runs **fullscreen** by default, which is how the cabinet is played.
+It always renders at a logical 800x600 and lets SDL scale that onto whatever
+panel is fitted, so any laptop resolution works. To run in a window instead
+(much easier while developing):
+
+```
+# Windows PowerShell
+$env:PACDAWG_WINDOWED = "1"; python main.py
+
+# bash
+PACDAWG_WINDOWED=1 python main.py
+```
+
 To run headlessly (no display, e.g. in CI or over SSH):
 
 ```
