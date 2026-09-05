@@ -26,6 +26,17 @@ status`` clean:
   time. Without this, two runs of this script would start SDL at
   slightly different wall-clock moments and could render a different
   walk-cycle frame at the "same" captured moment.
+* The high score shown in the captured HUD is pinned to a fixed
+  constant (PINNED_HIGH_SCORE below) rather than left to read the real,
+  persisted ``highscore.json``. ``Game()`` loads that file at
+  construction time, and it is genuinely mutable shared state -- any
+  other game session (a real play session, a test run, this very tool
+  run previously) can commit a new high score to it between two
+  invocations of this generator, which would otherwise change a
+  handful of pixels in the rendered "HIGH ######" text and break
+  byte-for-byte reproducibility for a reason that has nothing to do
+  with the demo itself. This was the actual, confirmed source of the
+  non-determinism this tool originally shipped with.
 """
 from __future__ import annotations
 
@@ -49,6 +60,10 @@ from pacdawg.game import Game, GameState  # noqa: E402
 # A build-time tool, not a runtime setting -- deliberately kept here
 # rather than in pacdawg/config.py.
 SEED = 20260115  # fixed: pins every rng.uniform()/rng-driven choice the demo makes
+# Fixed, arbitrary stand-in for whatever the real persisted high score
+# happens to be right now -- see the module docstring for why reading
+# the real highscore.json here would break determinism.
+PINNED_HIGH_SCORE = 12000
 # Chosen by sampling the demo over two minutes and picking a stretch
 # where multiple ghosts are simultaneously within a handful of tiles of
 # Scotty while hunting (CHASE) -- reads as an active, multi-ghost chase
@@ -121,6 +136,13 @@ def main() -> int:
     pygame.time.get_ticks = clock.get_ticks
 
     game = Game(rng=random.Random(SEED))
+    # Pin the high score before entering the demo -- see the module
+    # docstring for why reading the real persisted value here would
+    # break determinism. _enter_demo() seeds the demo's disposable
+    # ScoreBoard from whatever game.score.high_score currently is, so
+    # setting it here (before the swap) is enough to make the captured
+    # HUD's "HIGH ######" text fully independent of highscore.json.
+    game.score.high_score = PINNED_HIGH_SCORE
     game._enter_demo()
 
     warmup_ticks = int(round(WARMUP_SECONDS * SIM_HZ))
