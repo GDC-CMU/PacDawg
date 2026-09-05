@@ -208,6 +208,42 @@ class GhostModeMachineTests(unittest.TestCase):
                 break
             self.ghost.update(self.maze, 1 / 30.0, player, ghosts, "chase", rng)
         self.assertEqual(self.ghost.mode, GhostMode.HOUSE)
+        # It must have physically reached its own in-house home tile, not
+        # just the gate/doorway.
+        self.assertEqual(self.ghost.tile, self.ghost.home_tile)
+
+    def test_revived_ghost_dwells_before_being_release_eligible(self):
+        # Regression test: an eaten ghost used to flip straight to HOUSE
+        # with released=False right at the gate, but the release
+        # counters/timer were typically already satisfied by mid-level,
+        # so it walked straight back out the doorway it just arrived
+        # through. There must now be a real, visible, configurable dwell.
+        self.ghost.mode = GhostMode.FRIGHTENED
+        self.ghost.frightened_seconds_left = 3.0
+        self.ghost.get_eaten()
+        player = Scotty(8, 13, levels.pacman_normal_speed(1))
+        ghosts = {"gates": self.ghost}
+        rng = random.Random(2)
+        for _ in range(400):
+            if self.ghost.mode is GhostMode.HOUSE:
+                break
+            self.ghost.update(self.maze, 1 / 30.0, player, ghosts, "chase", rng)
+        self.assertEqual(self.ghost.mode, GhostMode.HOUSE)
+        self.assertAlmostEqual(self.ghost.house_dwell_remaining, config.GHOST_REVIVE_DWELL_SECONDS)
+
+        # It must not become SCATTER/CHASE-eligible for at least the
+        # configured dwell -- update() alone (with no external release())
+        # never leaves HOUSE mode, so drive the dwell timer down directly
+        # and confirm it only reaches zero after the configured duration.
+        dt = 1 / 60.0
+        elapsed = 0.0
+        while self.ghost.house_dwell_remaining > 0:
+            self.ghost.update(self.maze, dt, player, ghosts, "chase", rng)
+            elapsed += dt
+            self.assertEqual(self.ghost.mode, GhostMode.HOUSE)
+            if elapsed > config.GHOST_REVIVE_DWELL_SECONDS + 1.0:
+                self.fail("dwell never expired")
+        self.assertGreaterEqual(elapsed, config.GHOST_REVIVE_DWELL_SECONDS - 0.05)
 
     def test_is_flashing_only_near_end_of_frightened(self):
         self.ghost.mode = GhostMode.FRIGHTENED
@@ -342,6 +378,67 @@ class ScatterChaseClockTests(unittest.TestCase):
         apply_phase_change({"gates": ghost}, "scatter")
         self.assertEqual(ghost.mode, GhostMode.FRIGHTENED)
         self.assertEqual(ghost.direction, Direction.RIGHT)
+
+
+class ScatterPatrolTests(unittest.TestCase):
+    """Regression tests: scatter (and Doherty's close-range retreat) must
+    make ghosts patrol/orbit their corner forever, never park there.
+
+    The bug was that scatter corners sat on reachable open floor, and the
+    "stop on arrival" rule (meant only for genuine static destinations
+    like the house exit or gate) applied to them too -- so a ghost would
+    drive to its corner, arrive, and freeze there for the rest of the
+    phase.
+    """
+
+    def setUp(self):
+        self.maze = levels.build_maze(1)
+        self.player = Scotty(*self.maze.player_start, levels.pacman_normal_speed(1))
+        self.ghosts = create_ghosts(self.maze, level=1)
+        self.rng = random.Random(42)
+
+    def test_no_hunting_ghost_is_ever_stationary_during_scatter(self):
+        for ghost in self.ghosts.values():
+            ghost.release()
+            ghost.mode = GhostMode.SCATTER
+
+        visited = {name: set() for name in self.ghosts}
+        for _ in range(600):  # 10 simulated seconds
+            for name, ghost in self.ghosts.items():
+                previous = (ghost.x, ghost.y)
+                ghost.update(self.maze, 1 / 60.0, self.player, self.ghosts, "scatter", self.rng)
+                visited[name].add(ghost.tile)
+                self.assertNotEqual(
+                    (ghost.x, ghost.y),
+                    previous,
+                    f"{name} was stationary for a frame while in SCATTER",
+                )
+
+        for name, tiles in visited.items():
+            self.assertGreater(
+                len(tiles), 5, f"{name} only ever visited {len(tiles)} tile(s) while scattering"
+            )
+
+    def test_scatter_corners_are_outside_the_maze_and_unreachable(self):
+        for ghost in self.ghosts.values():
+            self.assertFalse(self.maze.in_bounds(*ghost.corner))
+
+    def test_doherty_close_range_retreat_also_keeps_moving(self):
+        doherty = self.ghosts["doherty"]
+        doherty.release()
+        doherty.mode = GhostMode.CHASE
+
+        visited = set()
+        for _ in range(600):
+            # Keep Scotty right next to Doherty so it stays in "retreat"
+            # mode (< 8 tiles away) for the whole run.
+            self.player.x, self.player.y = doherty.x + 1, doherty.y
+            previous = (doherty.x, doherty.y)
+            doherty.update(self.maze, 1 / 60.0, self.player, self.ghosts, "chase", self.rng)
+            visited.add(doherty.tile)
+            self.assertNotEqual((doherty.x, doherty.y), previous)
+
+        self.assertGreater(len(visited), 5)
 
 
 if __name__ == "__main__":

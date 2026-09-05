@@ -118,6 +118,17 @@ GLOBAL_DOT_COUNTER_THRESHOLDS = {"hunt": 7, "wean": 17, "doherty": 32}
 # of any counter, and the timer resets.
 GHOST_RELEASE_TIMEOUT_SECONDS_BY_BAND = {"1-4": 4.0, "5+": 3.0}
 
+# How long a *revived* ghost (eaten, walked home, arrived at its in-house
+# slot) bobs in the house before it is eligible for release again. The
+# original ties this purely to the ambient release timer/counters, which
+# are typically already satisfied by mid-level -- so a revived ghost can
+# walk straight back out the door it just arrived through. We make the
+# minimum dwell explicit and tunable here instead of leaving it implicit,
+# so there is always a visible pause before a revived ghost rejoins the
+# chase. This is a deliberate, documented departure from strict fidelity
+# for legibility on a cabinet, not a transcription of the Dossier.
+GHOST_REVIVE_DWELL_SECONDS = 3.0
+
 # --- Scoring --------------------------------------------------------------------
 PELLET_SCORE = 10
 POWER_PELLET_SCORE = 50

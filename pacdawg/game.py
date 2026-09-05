@@ -26,7 +26,8 @@ Coord = Tuple[int, int]
 
 
 class GameState(Enum):
-    ATTRACT = auto()
+    ATTRACT = auto()  # the main menu
+    HOW_TO_PLAY = auto()
     READY = auto()
     PLAYING = auto()
     DYING = auto()
@@ -38,6 +39,12 @@ READY_SECONDS = 2.0
 DYING_SECONDS = 1.5
 LEVEL_CLEAR_SECONDS = 2.0
 COLLISION_DISTANCE_SQ = 0.36  # ~0.6 tiles: catches near-misses, not just exact overlap
+
+# Main menu entries, in display/selection order.
+MENU_START_GAME = "START GAME"
+MENU_HOW_TO_PLAY = "HOW TO PLAY"
+MENU_EXIT_TO_GALLERY = "EXIT TO GALLERY"
+MENU_ITEMS = (MENU_START_GAME, MENU_HOW_TO_PLAY, MENU_EXIT_TO_GALLERY)
 
 # Ghost-house release preference order (Dossier Ch. 2): only the single
 # most-preferred ghost still waiting inside accrues a dot counter at a
@@ -82,6 +89,11 @@ class Game:
         # activate" -- true from a fresh level, false after a life is lost
         # until Doherty (the last-preference ghost) leaves the house again.
         self.elroy_unlocked = True
+
+        # Main menu / HOW TO PLAY navigation state.
+        self.menu_index = 0
+        self._menu_last_direction: Optional[Direction] = None
+        self._menu_last_confirm = False
 
         # pygame handles, created lazily by run()/init_display()
         self.screen = None
@@ -144,8 +156,12 @@ class Game:
     # -- pure per-frame update --------------------------------------------------
     def update(self, dt: float, raw: RawInput) -> None:
         if self.state is GameState.ATTRACT:
-            if input_mod.wants_confirm(raw):
-                self.new_game()
+            self._update_menu(raw)
+            return
+
+        if self.state is GameState.HOW_TO_PLAY:
+            if self._menu_confirm_pressed(raw):
+                self.state = GameState.ATTRACT
             return
 
         if self.state is GameState.READY:
@@ -184,9 +200,47 @@ class Game:
             return
 
         if self.state is GameState.GAME_OVER:
-            if input_mod.wants_confirm(raw):
+            if self._menu_confirm_pressed(raw):
                 self.state = GameState.ATTRACT
+                self.menu_index = 0
             return
+
+    # -- main menu / how to play --------------------------------------------------
+    def _update_menu(self, raw: RawInput) -> None:
+        direction = self._menu_direction_pressed(raw)
+        if direction is Direction.UP:
+            self.menu_index = (self.menu_index - 1) % len(MENU_ITEMS)
+        elif direction is Direction.DOWN:
+            self.menu_index = (self.menu_index + 1) % len(MENU_ITEMS)
+        if self._menu_confirm_pressed(raw):
+            self._activate_menu_item()
+
+    def _menu_direction_pressed(self, raw: RawInput) -> Optional[Direction]:
+        """Edge-triggered steer: fires only the frame a *new* direction is
+        pressed, so holding a direction doesn't rapid-fire through every
+        menu entry in a single held press."""
+        current = input_mod.resolve_direction(raw)
+        pressed = current if (current is not None and current is not self._menu_last_direction) else None
+        self._menu_last_direction = current
+        return pressed
+
+    def _menu_confirm_pressed(self, raw: RawInput) -> bool:
+        """Edge-triggered confirm: fires only the frame confirm is newly
+        held, so a single button press can't chain through multiple menu
+        transitions (e.g. GAME_OVER -> ATTRACT -> START GAME) in one go."""
+        current = input_mod.wants_confirm(raw)
+        pressed = current and not self._menu_last_confirm
+        self._menu_last_confirm = current
+        return pressed
+
+    def _activate_menu_item(self) -> None:
+        item = MENU_ITEMS[self.menu_index]
+        if item == MENU_START_GAME:
+            self.new_game()
+        elif item == MENU_HOW_TO_PLAY:
+            self.state = GameState.HOW_TO_PLAY
+        elif item == MENU_EXIT_TO_GALLERY:
+            self._exit_to_gallery()
 
     def _update_playing(self, dt: float, raw: RawInput) -> None:
         self.life_elapsed += dt
@@ -227,7 +281,7 @@ class Game:
 
     def _release_ghosts_if_due(self) -> None:
         gates = self.ghosts.get("gates")
-        if gates is not None and gates.mode is GhostMode.HOUSE:
+        if gates is not None and self._house_ready(gates):
             gates.release()  # Blinky/Gates is never subject to house-release logic
 
         if self.dot_counter_mode == "personal":
@@ -235,6 +289,12 @@ class Game:
         else:
             self._release_via_global_counter()
         self._release_via_timeout()
+
+    @staticmethod
+    def _house_ready(ghost: Ghost) -> bool:
+        """True if a ghost is in the house and not still dwelling after a
+        revival (see config.GHOST_REVIVE_DWELL_SECONDS)."""
+        return ghost.mode is GhostMode.HOUSE and ghost.house_dwell_remaining <= 0.0
 
     def _release_via_personal_counter(self) -> None:
         while self._house_order_index < len(HOUSE_RELEASE_ORDER):
@@ -244,6 +304,8 @@ class Game:
                 self._house_order_index += 1
                 self._house_dot_counter = 0
                 continue
+            if not self._house_ready(ghost):
+                break  # still dwelling after a revival; try again later
             limit = levels.personal_dot_limit(self.score.level, name, self.maze.total_pellets)
             if self._house_dot_counter >= limit:
                 ghost.release()
@@ -255,7 +317,7 @@ class Game:
     def _release_via_global_counter(self) -> None:
         for name in HOUSE_RELEASE_ORDER:
             ghost = self.ghosts.get(name)
-            if ghost is None or ghost.mode is not GhostMode.HOUSE:
+            if ghost is None or not self._house_ready(ghost):
                 continue
             threshold = levels.global_dot_counter_threshold(name, self.maze.total_pellets)
             if self._global_dot_counter >= threshold:
@@ -274,10 +336,10 @@ class Game:
             return
         for name in HOUSE_RELEASE_ORDER:
             ghost = self.ghosts.get(name)
-            if ghost is not None and ghost.mode is GhostMode.HOUSE:
+            if ghost is not None and self._house_ready(ghost):
                 ghost.release()
+                self._time_since_last_pellet = 0.0
                 break
-        self._time_since_last_pellet = 0.0
 
     def _update_cruise_elroy(self) -> None:
         """Gates (Blinky) speeds up as pellets run low, and once active
@@ -377,12 +439,17 @@ class Game:
     def maybe_exit(self, raw: RawInput) -> None:
         """P1 (button 5) or Esc must exit immediately, from any state."""
         if input_mod.wants_exit(raw):
-            self.score.commit_high_score()
-            try:
-                pygame.quit()
-            except Exception:
-                pass
-            sys.exit(0)
+            self._exit_to_gallery()
+
+    def _exit_to_gallery(self) -> None:
+        """Shared by the P1/Esc contract and the menu's EXIT TO GALLERY
+        entry: commit the high score, then quit exactly like P1 does."""
+        self.score.commit_high_score()
+        try:
+            pygame.quit()
+        except Exception:
+            pass
+        sys.exit(0)
 
     # -- pygame plumbing ------------------------------------------------------------
     def init_display(self) -> None:

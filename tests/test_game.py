@@ -10,7 +10,7 @@ import random
 import unittest
 
 from pacdawg import levels
-from pacdawg.game import Game, GameState
+from pacdawg.game import Game, GameState, MENU_ITEMS, MENU_EXIT_TO_GALLERY, MENU_HOW_TO_PLAY, MENU_START_GAME
 from pacdawg.ghosts import GhostMode
 from pacdawg.input import RawInput
 
@@ -157,6 +157,77 @@ class ScatterChasePauseTests(unittest.TestCase):
         list(game.ghosts.values())[0].frighten(0.05, 0)
         _run_frames(game, 10)  # frightened window ends partway through
         self.assertGreater(game.scatter_clock.elapsed, 0.0)
+
+
+class MainMenuTests(unittest.TestCase):
+    def test_starts_on_the_attract_menu_with_start_game_selected(self):
+        game = Game(rng=random.Random(10))
+        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_START_GAME)
+
+    def test_down_then_up_returns_to_the_original_selection(self):
+        game = Game(rng=random.Random(11))
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"down"})))
+        game.update(1 / 60.0, RawInput())  # release, so the next press is a new edge
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_HOW_TO_PLAY)
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"up"})))
+        game.update(1 / 60.0, RawInput())
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_START_GAME)
+
+    def test_holding_down_does_not_rapid_fire_through_every_item(self):
+        # Edge-triggered nav: holding the direction for many frames must
+        # move the selection at most once, not scroll continuously.
+        game = Game(rng=random.Random(12))
+        held = RawInput(pressed_keys=frozenset({"down"}))
+        for _ in range(30):
+            game.update(1 / 60.0, held)
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_HOW_TO_PLAY)
+
+    def test_confirm_on_how_to_play_opens_that_screen_and_back_returns(self):
+        game = Game(rng=random.Random(13))
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"down"})))
+        game.update(1 / 60.0, RawInput())
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.HOW_TO_PLAY)
+
+        game.update(1 / 60.0, RawInput())
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.ATTRACT)
+
+    def test_holding_confirm_across_the_how_to_play_transition_does_not_double_fire(self):
+        # A single held button press must not chain HOW_TO_PLAY -> ATTRACT
+        # -> re-enter HOW_TO_PLAY (or worse, START GAME) in one frame.
+        game = Game(rng=random.Random(14))
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"down"})))
+        game.update(1 / 60.0, RawInput())
+        held_confirm = RawInput(pressed_keys=frozenset({"return"}))
+        game.update(1 / 60.0, held_confirm)
+        self.assertEqual(game.state, GameState.HOW_TO_PLAY)
+        for _ in range(10):
+            game.update(1 / 60.0, held_confirm)
+        self.assertEqual(game.state, GameState.HOW_TO_PLAY)  # did not bounce back out
+
+    def test_confirm_on_start_game_begins_play(self):
+        game = Game(rng=random.Random(15))
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.READY)
+
+    def test_confirm_on_exit_to_gallery_calls_sys_exit_zero(self):
+        game = Game(rng=random.Random(16))
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"down"})))
+        game.update(1 / 60.0, RawInput())
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"down"})))
+        game.update(1 / 60.0, RawInput())
+        self.assertEqual(MENU_ITEMS[game.menu_index], MENU_EXIT_TO_GALLERY)
+        with self.assertRaises(SystemExit) as cm:
+            game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_game_over_confirm_returns_to_attract_menu(self):
+        game = Game(rng=random.Random(17))
+        game.state = GameState.GAME_OVER
+        game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
+        self.assertEqual(game.state, GameState.ATTRACT)
 
 
 if __name__ == "__main__":

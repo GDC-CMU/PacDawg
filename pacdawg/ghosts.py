@@ -42,11 +42,22 @@ class GhostMode(Enum):
 # retreat). Placed near the four maze corners, inset by one tile so they
 # are always open floor rather than a border wall.
 def _corners(maze: Maze) -> Dict[str, Coord]:
+    """Scatter/retreat targets, one per ghost, in dead space just outside
+    each maze corner.
+
+    These must be genuinely unreachable (Dossier Ch. 3: "each target tile
+    is in dead space above or below the actual maze making them
+    impossible for the ghosts to reach"). An earlier version inset these
+    by one tile so they sat on open floor -- which meant a ghost could
+    actually *arrive*, at which point the "stop on arrival" rule (see
+    ``_step_toward``) parked it there for the rest of the phase instead
+    of the intended perpetual patrol/orbit around the corner.
+    """
     return {
-        "gates": (maze.cols - 2, 1),
-        "hunt": (1, 1),
-        "wean": (maze.cols - 2, maze.rows - 2),
-        "doherty": (1, maze.rows - 2),
+        "gates": (maze.cols + 2, -3),
+        "hunt": (-3, -3),
+        "wean": (maze.cols + 2, maze.rows + 2),
+        "doherty": (-3, maze.rows + 2),
     }
 
 
@@ -157,6 +168,7 @@ class Ghost(MovingActor):
         super().__init__(start[0], start[1], normal_speed)
         self.name = name
         self.corner = corner
+        self.home_tile = start  # in-house slot; eaten ghosts walk back to this exact tile
         self.mode = GhostMode.HOUSE
         self.base_speed = normal_speed
         self.frightened_speed = frightened_speed if frightened_speed is not None else normal_speed
@@ -175,10 +187,14 @@ class Ghost(MovingActor):
         self.elroy_stage = 0  # 0 = normal, 1 = Elroy 1, 2 = Elroy 2 (Gates only)
         self._pending_reversal = False
         self._house_anchor_row = float(start[1])
+        self._eaten_reached_gate = False  # eyes: False = walking to gate, True = walking home
+        self.house_dwell_remaining = 0.0  # revived ghosts bob this long before re-releasing
 
     def teleport(self, col: int, row: int, direction: Direction = Direction.NONE) -> None:
         super().teleport(col, row, direction)
         self._house_anchor_row = float(row)
+        self._eaten_reached_gate = False
+        self.house_dwell_remaining = 0.0
 
     # -- house behaviour ---------------------------------------------------
     def release(self) -> None:
@@ -198,6 +214,20 @@ class Ghost(MovingActor):
             self._target_x, self._target_y = self.x, self.y
             self.direction = Direction.UP
             self.queue_direction(Direction.NONE)
+
+    def _revive(self) -> None:
+        """A ghost eaten and walked all the way home becomes a normal
+        (non-eyes) ghost again, waiting in its house slot for at least
+        ``config.GHOST_REVIVE_DWELL_SECONDS`` before it can be released
+        again (see config.py for why this is an explicit minimum rather
+        than falling straight through to whatever the ambient release
+        counters already allow)."""
+        self.mode = GhostMode.HOUSE
+        self.direction = Direction.NONE
+        self._house_anchor_row = self.y
+        self.released = False
+        self._eaten_reached_gate = False
+        self.house_dwell_remaining = config.GHOST_REVIVE_DWELL_SECONDS
 
     def _bob_in_house(self, dt: float) -> None:
         # Small, deterministic vertical bob so idle ghosts still read as
@@ -285,6 +315,8 @@ class Ghost(MovingActor):
         rng: random.Random,
     ) -> None:
         if self.mode is GhostMode.HOUSE:
+            if self.house_dwell_remaining > 0:
+                self.house_dwell_remaining = max(0.0, self.house_dwell_remaining - dt)
             self._bob_in_house(dt)
             return
 
@@ -299,19 +331,26 @@ class Ghost(MovingActor):
 
         if self.mode is GhostMode.LEAVING:
             target = _house_exit_tile(maze)
-            self._step_toward(maze, dt, can_enter, target, speed)
+            self._step_toward(maze, dt, can_enter, target, speed, stop_on_arrival=True)
             if self.tile == target and self.is_centered():
                 self.mode = GhostMode.CHASE if global_phase == "chase" else GhostMode.SCATTER
             return
 
         if self.mode is GhostMode.EATEN:
-            target = _gate_tile(maze)
-            self._step_toward(maze, dt, can_enter, target, speed)
-            if self.tile == target and self.is_centered():
-                self.mode = GhostMode.HOUSE
-                self.direction = Direction.NONE
-                self._house_anchor_row = self.y
-                self.released = False  # so it can leave the house again later
+            # Eyes travel to the gate first, then *into* the house to this
+            # ghost's own home slot -- not just as far as the doorway --
+            # and only then revive, so there's a real, visible trip home
+            # rather than an instant bounce back out through the gate.
+            if not self._eaten_reached_gate:
+                target = _gate_tile(maze)
+                self._step_toward(maze, dt, can_enter, target, speed, stop_on_arrival=True)
+                if self.tile == target and self.is_centered():
+                    self._eaten_reached_gate = True
+            else:
+                target = self.home_tile
+                self._step_toward(maze, dt, can_enter, target, speed, stop_on_arrival=True)
+                if self.tile == target and self.is_centered():
+                    self._revive()
             return
 
         if self.mode is GhostMode.FRIGHTENED:
@@ -321,12 +360,15 @@ class Ghost(MovingActor):
         # SCATTER or CHASE: personality-driven target seeking. Cruise Elroy
         # (Gates only, once active) targets Scotty directly even during
         # scatter, per the documented rule -- the other three ghosts keep
-        # scattering normally.
+        # scattering normally. Scatter/chase targets must never trigger a
+        # stop-on-arrival: the scatter corner is deliberately unreachable
+        # (see _corners()) so a ghost orbits it instead of parking, and a
+        # chase target is always Scotty's live, moving position anyway.
         if self.mode is GhostMode.SCATTER and not (self.name == "gates" and self.elroy_stage > 0):
             target = self.corner
         else:
             target = TARGET_FUNCTIONS[self.name](self, player, ghosts, maze)
-        self._step_toward(maze, dt, can_enter, target, speed)
+        self._step_toward(maze, dt, can_enter, target, speed, stop_on_arrival=False)
 
     def _current_speed(self, maze: Maze) -> float:
         if self.mode is GhostMode.FRIGHTENED:
@@ -344,21 +386,32 @@ class Ghost(MovingActor):
             return self.tunnel_speed
         return base
 
-    def _step_toward(self, maze: Maze, dt: float, can_enter, target: Coord, speed: float) -> None:
+    def _step_toward(
+        self, maze: Maze, dt: float, can_enter, target: Coord, speed: float, stop_on_arrival: bool
+    ) -> None:
+        """Seek ``target`` greedily, one junction at a time.
+
+        ``stop_on_arrival`` must be True only for genuine static
+        destinations (the house exit, the gate, the in-house home tile)
+        -- never for a scatter corner or a chase target. Those targets
+        either move (chase) or are deliberately unreachable (scatter), so
+        forcing a stop there would either be a no-op or would park the
+        ghost instead of letting it patrol/orbit.
+        """
+
         def on_center(actor: "Ghost") -> None:
             if actor._pending_reversal:
                 actor._pending_reversal = False
                 actor.queue_direction(actor.direction.opposite)
                 return
-            if actor.tile == target:
-                # Arrived exactly at a static target (e.g. the house exit
-                # or the gate). The greedy seek rule below always picks
-                # *some* direction to keep closing on a target, so without
-                # this explicit stop it would sail straight past forever
-                # (there is no "distance to self" that beats moving away
-                # by exactly one tile). Force a real stop here; queuing
-                # alone is not enough since a still-valid old direction
-                # would otherwise just carry on.
+            if stop_on_arrival and actor.tile == target:
+                # Arrived exactly at a static target. The greedy seek rule
+                # below always picks *some* direction to keep closing on a
+                # target, so without this explicit stop it would sail
+                # straight past forever (there is no "distance to self"
+                # that beats moving away by exactly one tile). Force a
+                # real stop here; queuing alone is not enough since a
+                # still-valid old direction would otherwise just carry on.
                 actor.direction = Direction.NONE
                 actor.queue_direction(Direction.NONE)
                 return

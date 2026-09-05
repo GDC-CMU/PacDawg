@@ -11,13 +11,15 @@ for this project (see [Design notes](#design-notes) below). Maze-chase
 as a genre is fair game; Bandai Namco's specific maze layout, sprites,
 and name are not, and this project doesn't reproduce them.
 
-![Title screen with the ghost cast roster and high score](docs/screenshots/title_screen.png)
+![Main menu with the ghost cast roster and high score](docs/screenshots/title_screen.png)
 
 ## What it is
 
-- A proper title/attract screen naming the real arcade buttons and
-  showing the ghost cast, shown on launch and again after every game
-  over -- see [Controls](#controls).
+- A real, navigable **main menu** (Start Game / How to Play / Exit to
+  Gallery), not just a "press start" splash -- shown on launch and again
+  after every game over. See [Controls](#controls).
+- A dedicated **How to Play** screen covering arcade and keyboard
+  controls, the ghost cast, scoring, and what power pellets do.
 - Four campus-themed mazes-worth of original layouts (**The Cut**, **The
   Fence**, **Skibo**), cycling forever and speeding up as you go.
 - Four ghosts with genuinely different targeting algorithms (not one
@@ -33,13 +35,15 @@ and name are not, and this project doesn't reproduce them.
 - **All gameplay art is swappable PNGs** -- see [Swapping in real
   art](#swapping-in-real-art).
 
+![How to play screen: controls, the ghost cast, and scoring](docs/screenshots/how_to_play_screen.png)
+
 ![Ready screen with all four ghosts in the house](docs/screenshots/gameplay_03_ready.png)
 
 ![Mid-level gameplay with the four ghosts spread across the maze](docs/screenshots/gameplay_01.png)
 
 ![Frightened and eaten ghosts, plus a Skibo-themed bonus fruit](docs/screenshots/gameplay_02.png)
 
-![Game over screen returning to the title, not quitting](docs/screenshots/game_over_screen.png)
+![Game over screen returning to the menu, not quitting](docs/screenshots/game_over_screen.png)
 
 ## Controls
 
@@ -47,24 +51,31 @@ and name are not, and this project doesn't reproduce them.
 
 | Input | Action |
 |---|---|
-| Joystick (either connected stick), axis 0/1 | Steer Scotty |
-| Button 1 (A) or Button 9 (Start) | Confirm / start |
+| Joystick (either connected stick), axis 0/1 | Steer Scotty / navigate the menu |
+| Button 1 (A) or Button 9 (Start) | Confirm / select the highlighted menu entry |
 | **Button 5 (P1)** | **Exit immediately**, from any screen, back to the launcher |
 
 The cabinet has two identical joystick devices; either one can steer.
 Hot-plugging (disconnecting/reconnecting a stick mid-game) is handled
 without crashing.
 
-The title screen (shown on launch and again after every game over) is
-the one place that tells a visitor how to start and that P1 exits back
-to the launcher's gallery, since the gallery itself doesn't say so.
+The main menu (shown on launch and again after every game over) is a
+real, navigable menu -- **Start Game**, **How to Play**, **Exit to
+Gallery** -- moved with axis 1 up/down (or arrows/WASD) and confirmed
+with A/Start/Enter/Space, with the selected entry given a solid,
+high-contrast highlight bar rather than a subtle tint so it reads from
+several feet away. It's also the one place that tells a visitor P1 exits
+back to the launcher's gallery, since the gallery itself doesn't say so.
+**Exit to Gallery** does exactly what P1 does. **How to Play** is a full
+screen covering controls, the ghost cast, scoring, and power pellets;
+confirm again to return to the menu.
 
 ### Keyboard (development)
 
 | Input | Action |
 |---|---|
-| Arrow keys or WASD | Steer Scotty |
-| Enter / Space | Confirm / start |
+| Arrow keys or WASD | Steer Scotty / navigate the menu |
+| Enter / Space | Confirm / select |
 | Esc | Exit immediately |
 
 ## Running locally
@@ -175,7 +186,7 @@ pacdawg/
   levels.py              the original CMU-themed layouts + per-level tuning
   entities.py            Scotty + tile-aligned movement, tunnels
   ghosts.py              four personalities + scatter/chase/frightened machine
-  game.py                state machine: attract -> ready -> play -> death -> ...
+  game.py                state machine: menu -> how to play -> ready -> play -> death -> ...
   score.py               scoring, lives, extra life, high-score persistence
   input.py               joystick + keyboard intent resolution
   assets.py              the single point of PNG access (see assets/README.md)
@@ -219,8 +230,18 @@ those two personalities beatable by facing up near them.
 All four alternate between scatter (heading for a home corner) and chase
 phases on a per-level timetable that pauses while any ghost is
 frightened, turn frightened (and eventually flash a warning) after a
-power pellet, and become eyes-only when eaten, racing back to the ghost
-house before rejoining the chase.
+power pellet, and become eyes-only when eaten, racing back into the
+house to their own home tile before rejoining the chase.
+
+Scatter corners are placed just outside the maze, in unreachable dead
+space -- the same trick the original uses -- so a ghost patrols and
+orbits its corner for the whole scatter phase instead of driving to it,
+arriving, and parking there. Doherty's close-range retreat targets the
+same unreachable corner, for the same reason. An eaten ghost dwells
+visibly in the house for `config.GHOST_REVIVE_DWELL_SECONDS` (3 seconds
+by default) after reaching its home tile before it's eligible to leave
+again, rather than walking straight back out the door it just arrived
+through.
 
 ### Mazes
 
