@@ -1,11 +1,4 @@
-"""Tests for the documented Pac-Man Dossier speed/timing lookups.
-
-These pin down the transcription from ``pacman-reference.md`` into
-``config.py``/``levels.py``: base speed, per-level speed bands, the
-scatter/chase timetable, frightened duration/flash counts (including the
-documented non-monotonic jumps and the zero-duration levels), and the
-maze-size scaling applied to every absolute dot count.
-"""
+"""Live beginner-to-hard progression and the retained reference timing data."""
 from __future__ import annotations
 
 import unittest
@@ -19,17 +12,17 @@ class BaseSpeedTests(unittest.TestCase):
         # tiles = 9.4697 tiles/sec (Dossier Table A.1 header).
         self.assertAlmostEqual(config.BASE_SPEED_TILES_PER_SEC, 9.46969703125, places=6)
 
-    def test_level_1_pacman_is_80_percent(self):
-        self.assertAlmostEqual(levels.pacman_normal_speed(1), config.BASE_SPEED_TILES_PER_SEC * 0.80)
+    def test_level_1_pacman_has_a_controlled_beginner_pace(self):
+        self.assertAlmostEqual(levels.pacman_normal_speed(1), config.BASE_SPEED_TILES_PER_SEC * 0.75)
 
-    def test_level_5_pacman_is_full_speed(self):
-        self.assertAlmostEqual(levels.pacman_normal_speed(5), config.BASE_SPEED_TILES_PER_SEC * 1.00)
+    def test_level_5_pacman_is_faster_than_the_opening_maze(self):
+        self.assertAlmostEqual(levels.pacman_normal_speed(5), config.BASE_SPEED_TILES_PER_SEC * 0.86)
 
-    def test_level_21_pacman_drops_back_to_90_percent(self):
+    def test_late_levels_keep_the_capped_90_percent_pace(self):
         self.assertAlmostEqual(levels.pacman_normal_speed(21), config.BASE_SPEED_TILES_PER_SEC * 0.90)
 
-    def test_level_1_ghost_is_75_percent(self):
-        self.assertAlmostEqual(levels.ghost_normal_speed(1), config.BASE_SPEED_TILES_PER_SEC * 0.75)
+    def test_level_1_ghost_is_45_percent(self):
+        self.assertAlmostEqual(levels.ghost_normal_speed(1), config.BASE_SPEED_TILES_PER_SEC * 0.45)
 
     def test_pacman_is_faster_than_ghosts_at_level_1(self):
         # The whole point of the cornering advantage: verify the raw
@@ -37,8 +30,9 @@ class BaseSpeedTests(unittest.TestCase):
         self.assertGreater(levels.pacman_normal_speed(1), levels.ghost_normal_speed(1))
 
     def test_elroy_2_is_the_only_speed_above_100_percent(self):
-        self.assertAlmostEqual(levels.elroy2_speed(5), config.BASE_SPEED_TILES_PER_SEC * 1.05)
-        self.assertGreater(levels.elroy2_speed(5), config.BASE_SPEED_TILES_PER_SEC)
+        self.assertAlmostEqual(levels.elroy2_speed(10), config.BASE_SPEED_TILES_PER_SEC * 1.05)
+        self.assertGreater(levels.elroy2_speed(10), config.BASE_SPEED_TILES_PER_SEC)
+        self.assertLess(levels.elroy2_speed(1), levels.pacman_normal_speed(1))
 
     def test_frightened_pacman_is_faster_than_normal(self):
         self.assertGreater(levels.pacman_frightened_speed(1), levels.pacman_normal_speed(1))
@@ -116,29 +110,24 @@ class ScatterChaseOpeningOverrideTests(unittest.TestCase):
 
 
 class FrightenedTableTests(unittest.TestCase):
-    def test_level_1_is_six_seconds_five_flashes(self):
-        self.assertEqual(levels.frightened_seconds_for_level(1), 6.0)
+    def test_level_1_has_twelve_seconds_and_a_clear_flash_warning(self):
+        self.assertEqual(levels.frightened_seconds_for_level(1), 12.0)
         self.assertEqual(levels.frightened_flashes_for_level(1), 5)
 
-    def test_non_monotonic_jumps_at_6_10_and_14(self):
-        # Levels 5 -> 6, 9 -> 10, and 13 -> 14 all jump *up*, not down --
-        # confirmed by two independent clones, not a transcription slip.
-        self.assertEqual(levels.frightened_seconds_for_level(5), 2.0)
-        self.assertEqual(levels.frightened_seconds_for_level(6), 5.0)
-        self.assertEqual(levels.frightened_seconds_for_level(9), 1.0)
-        self.assertEqual(levels.frightened_seconds_for_level(10), 5.0)
-        self.assertEqual(levels.frightened_seconds_for_level(13), 1.0)
-        self.assertEqual(levels.frightened_seconds_for_level(14), 3.0)
+    def test_power_duration_decreases_after_each_clear_until_the_cap(self):
+        times = [levels.frightened_seconds_for_level(level) for level in range(1, 11)]
+        self.assertEqual(times, [12, 11, 10, 9, 8, 7, 6, 5, 4, 3])
 
-    def test_levels_17_19_20_and_beyond_have_zero_frightened_time(self):
-        for level in (17, 19, 20, 25):
+    def test_late_power_pellets_remain_useful_instead_of_turning_off(self):
+        for level in (10, 17, 19, 20, 25, 1000):
             with self.subTest(level=level):
-                self.assertEqual(levels.frightened_seconds_for_level(level), 0.0)
-                self.assertEqual(levels.frightened_flashes_for_level(level), 0)
+                self.assertEqual(levels.frightened_seconds_for_level(level), 3.0)
+                self.assertEqual(levels.frightened_flashes_for_level(level), 5)
 
-    def test_level_18_is_not_zero_despite_neighbors_being_zero(self):
-        self.assertEqual(levels.frightened_seconds_for_level(18), 1.0)
-        self.assertEqual(levels.frightened_flashes_for_level(18), 3)
+    def test_reference_data_is_separate_from_live_difficulty(self):
+        self.assertEqual(config.FRIGHTENED_SECONDS_BY_LEVEL[0], 6)
+        self.assertEqual(config.FRIGHTENED_SECONDS_BY_LEVEL[16], 0)
+        self.assertNotEqual(levels.frightened_seconds_for_level(1), config.FRIGHTENED_SECONDS_BY_LEVEL[0])
 
 
 class DotScalingTests(unittest.TestCase):
@@ -154,19 +143,23 @@ class DotScalingTests(unittest.TestCase):
         self.assertEqual((stage1_big, stage2_big), (40, 20))
 
     def test_personal_dot_limit_scales_and_zero_stays_zero(self):
-        self.assertEqual(levels.personal_dot_limit(1, "hunt", 488), 0)
-        self.assertEqual(levels.personal_dot_limit(1, "wean", 488), 60)  # 30 * (488/244)
-        self.assertEqual(levels.personal_dot_limit(1, "doherty", 488), 120)  # 60 * 2
+        self.assertEqual(levels.personal_dot_limit(1, "hunt", 488), 30)
+        self.assertEqual(levels.personal_dot_limit(1, "wean", 488), 90)
+        self.assertEqual(levels.personal_dot_limit(1, "doherty", 488), 150)
+        self.assertEqual(levels.personal_dot_limit(1, "gates", 488), 0)
 
-    def test_personal_dot_limit_is_zero_from_level_3_onward(self):
+    def test_all_ghosts_release_immediately_only_at_the_hard_cap(self):
         for name in ("hunt", "wean", "doherty"):
-            self.assertEqual(levels.personal_dot_limit(3, name, 488), 0)
+            self.assertGreater(levels.personal_dot_limit(3, name, 488), 0)
             self.assertEqual(levels.personal_dot_limit(10, name, 488), 0)
 
     def test_global_dot_counter_thresholds_scale(self):
-        self.assertEqual(levels.global_dot_counter_threshold("hunt", 488), 14)  # 7 * 2
-        self.assertEqual(levels.global_dot_counter_threshold("wean", 488), 34)  # 17 * 2
-        self.assertEqual(levels.global_dot_counter_threshold("doherty", 488), 64)  # 32 * 2
+        self.assertEqual(levels.global_dot_counter_threshold("hunt", 488), 30)
+        self.assertEqual(levels.global_dot_counter_threshold("wean", 488), 90)
+        self.assertEqual(levels.global_dot_counter_threshold("doherty", 488), 150)
+        self.assertEqual(levels.global_dot_counter_threshold("hunt", 488, level=10), 14)
+        self.assertEqual(levels.global_dot_counter_threshold("wean", 488, level=10), 34)
+        self.assertEqual(levels.global_dot_counter_threshold("doherty", 488, level=10), 64)
 
     def test_fruit_triggers_scale(self):
         first, second = levels.fruit_pellet_triggers(488)
@@ -174,13 +167,16 @@ class DotScalingTests(unittest.TestCase):
 
 
 class GhostReleaseTimeoutTests(unittest.TestCase):
-    def test_four_seconds_for_levels_1_to_4(self):
-        for level in (1, 2, 3, 4):
-            self.assertEqual(levels.ghost_release_timeout_seconds(level), 4.0)
+    def test_first_maze_gives_more_time_before_a_forced_release(self):
+        self.assertEqual(levels.ghost_release_timeout_seconds(1), 6.0)
 
-    def test_three_seconds_from_level_5(self):
-        for level in (5, 6, 50):
+    def test_three_seconds_at_the_hard_cap(self):
+        for level in (10, 20, 50):
             self.assertEqual(levels.ghost_release_timeout_seconds(level), 3.0)
+
+    def test_timeout_decreases_each_level_before_the_cap(self):
+        values = [levels.ghost_release_timeout_seconds(level) for level in range(1, 11)]
+        self.assertTrue(all(a > b for a, b in zip(values, values[1:])))
 
 
 class FruitScoreTests(unittest.TestCase):

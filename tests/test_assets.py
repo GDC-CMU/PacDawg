@@ -99,6 +99,28 @@ class AssetLoaderTests(unittest.TestCase):
         for name in assets.SPRITE_SPECS:
             self.assertIn(name, assets._cache)
 
+    def test_scotty_has_a_visible_open_and_closed_mouth_in_every_direction(self):
+        for direction in ("up", "down", "left", "right"):
+            closed = assets.get(f"scotty_{direction}_1")
+            opened = assets.get(f"scotty_{direction}_2")
+            self.assertEqual(closed.get_size(), (20, 20))
+            self.assertEqual(opened.get_size(), (20, 20))
+            closed_mask = pygame.mask.from_surface(closed)
+            open_mask = pygame.mask.from_surface(opened)
+            self.assertGreater(closed_mask.count() - open_mask.count(), 15, direction)
+            self.assertEqual(len(closed_mask.connected_components()), 1, direction)
+            self.assertEqual(len(open_mask.connected_components()), 1, direction)
+
+    def test_scotty_masters_are_aligned_transparent_pngs(self):
+        originals = [
+            pygame.image.load(str(assets.ASSETS_ROOT / "artwork" / f"scotty-mouth-{pose}.png"))
+            for pose in ("closed", "open")
+        ]
+        self.assertEqual(originals[0].get_size(), originals[1].get_size())
+        for image in originals:
+            self.assertTrue(image.get_flags() & pygame.SRCALPHA)
+            self.assertEqual(image.get_at((0, 0)).a, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

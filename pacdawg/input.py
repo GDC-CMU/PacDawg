@@ -29,8 +29,8 @@ KEY_DIRECTIONS = {
 CONFIRM_KEYS = frozenset({"return", "enter", "space"})
 # "Go back one level" -- Esc and Backspace on the keyboard, or button P1
 # (5)/B (0) on the cabinet. All four are equivalent aliases of a single
-# action (see Game.maybe_go_back()): from the main menu it exits to the
-# gallery; from anywhere else it returns to the main menu. There is no
+# action (see Game.maybe_go_back()): active runs pause/resume, the main
+# menu exits to the gallery, and help/results/demo return to the menu. There is no
 # separate "exit" concept any more -- P1 no longer means "quit
 # immediately from anywhere", it means "go back", exactly like Esc.
 BACK_KEYS = frozenset({"escape", "backspace"})
@@ -92,9 +92,8 @@ def wants_confirm(raw: RawInput) -> bool:
 def wants_go_back(raw: RawInput) -> bool:
     """The single "go back one level" intent: Esc, Backspace, button P1
     (5), or button B (0). All four are exactly equivalent everywhere in
-    the game -- see Game.maybe_go_back() for what "back" resolves to on
-    each screen (main menu -> exit to the gallery; anywhere else ->
-    main menu)."""
+    the game -- see Game.maybe_go_back() for pause/resume during a run,
+    exit at the main menu, and back to the menu on help/results/demo."""
     if raw.pressed_keys & BACK_KEYS:
         return True
     return bool(raw.pressed_buttons & (set(config.EXIT_BUTTONS) | set(config.BACK_BUTTONS)))

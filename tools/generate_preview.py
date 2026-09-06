@@ -20,12 +20,9 @@ status`` clean:
 * The demo's RNG is seeded with a fixed constant (SEED below).
 * Every simulated frame advances by the same fixed ``DT``, never real
   elapsed wall-clock time.
-* ``pygame.time.get_ticks()`` -- which the render path reads to drive
-  walk-cycle animation and pulsing effects -- is monkeypatched to a
-  synthetic clock advanced by the same fixed ``DT``, instead of real
-  time. Without this, two runs of this script would start SDL at
-  slightly different wall-clock moments and could render a different
-  walk-cycle frame at the "same" captured moment.
+* The game's own ``gameplay_time`` sprite clock advances by that same
+  fixed ``DT`` through ``Game.update()``, never wall time. It is also
+  the clock frozen by the in-game pause menu.
 * The high score shown in the captured HUD is pinned to a fixed
   constant (PINNED_HIGH_SCORE below) rather than left to read the real,
   persisted ``highscore.json``. ``Game()`` loads that file at
@@ -55,6 +52,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from pacdawg import config, render  # noqa: E402
 from pacdawg.game import Game, GameState  # noqa: E402
+from pacdawg.input import RawInput  # noqa: E402
 
 # --- Tunables ---------------------------------------------------------------
 # A build-time tool, not a runtime setting -- deliberately kept here
@@ -84,22 +82,6 @@ DT = 1.0 / SIM_HZ
 FRAME_PERIOD_SECONDS = 1.0 / FPS
 OUT_WIDTH, OUT_HEIGHT = 200, 150
 OUT_DIR = REPO_ROOT / "assets" / "preview"
-
-
-class _SyntheticClock:
-    """Stands in for ``pygame.time.get_ticks()`` during capture, so the
-    render path's animation timing is driven entirely by our fixed
-    frame counter and never by real wall-clock time. See the module
-    docstring for why that's required for deterministic output."""
-
-    def __init__(self) -> None:
-        self.ms = 0.0
-
-    def get_ticks(self) -> int:
-        return int(self.ms)
-
-    def advance(self, seconds: float) -> None:
-        self.ms += seconds * 1000.0
 
 
 def _ping_pong_sequence(names: list) -> list:
@@ -132,9 +114,6 @@ def main() -> int:
     pygame.init()
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
 
-    clock = _SyntheticClock()
-    pygame.time.get_ticks = clock.get_ticks
-
     game = Game(rng=random.Random(SEED))
     # Pin the high score before entering the demo -- see the module
     # docstring for why reading the real persisted value here would
@@ -144,11 +123,11 @@ def main() -> int:
     # HUD's "HIGH ######" text fully independent of highscore.json.
     game.score.high_score = PINNED_HIGH_SCORE
     game._enter_demo()
+    idle = RawInput()
 
     warmup_ticks = int(round(WARMUP_SECONDS * SIM_HZ))
     for _ in range(warmup_ticks):
-        game._update_demo(DT)
-        clock.advance(DT)
+        game.update(DT, idle)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     # Remove any stale frames from a previous run with a different
@@ -159,8 +138,7 @@ def main() -> int:
     frame_names = []
     elapsed_since_capture = 0.0
     while len(frame_names) < FRAME_COUNT:
-        game._update_demo(DT)
-        clock.advance(DT)
+        game.update(DT, idle)
         elapsed_since_capture += DT
         # Sample at 60Hz but capture on average every FRAME_PERIOD_SECONDS
         # of *simulated* time (7.5 ticks at 60Hz/8fps) -- not a rounded

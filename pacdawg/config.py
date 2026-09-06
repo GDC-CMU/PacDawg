@@ -70,6 +70,29 @@ ELROY_2_PCT_BY_BAND = (85, 95, 105, 105)  # the only speed above 100% in the gam
 EYES_SPEED_MULTIPLIER = 1.5  # of GHOST_NORMAL_PCT_BY_BAND for the level
 HOUSE_PACE_SPEED_MULTIPLIER = 0.5
 
+# Live cabinet difficulty, deliberately gentler than the reference tables.
+# Each completed maze advances one row; losing a life does not change tiers.
+# Columns: player %, ghost %, power-pellet seconds, stalled-release seconds,
+#          personal dot limits (Hunt, Wean, Doherty), out of 244 reference dots.
+# Values are game-design choices for a learnable ramp, not ROM transcriptions.
+DIFFICULTY_BY_LEVEL = (
+    (75, 45, 12.0, 6.0, (15, 45, 75)),
+    (78, 52, 11.0, 5.7, (12, 38, 65)),
+    (81, 59, 10.0, 5.4, (9, 32, 55)),
+    (84, 66, 9.0, 5.1, (6, 26, 45)),
+    (86, 73, 8.0, 4.8, (4, 20, 35)),
+    (88, 79, 7.0, 4.5, (2, 15, 26)),
+    (90, 84, 6.0, 4.2, (0, 10, 18)),
+    (90, 88, 5.0, 3.8, (0, 6, 12)),
+    (90, 92, 4.0, 3.4, (0, 3, 6)),
+    (90, 95, 3.0, 3.0, (0, 0, 0)),
+)
+FRIGHTENED_SPEED_FRACTION = 0.60
+TUNNEL_SPEED_FRACTION = 0.50
+POWER_PLAYER_BONUS_PCT = 10
+ELROY_BONUS_PCT = (5, 10)
+POWER_WARNING_FLASHES = 5
+
 # The Dossier's own "~71%/~79%/~87%" Pac-Man "dots speed" figures are not
 # separate tunables: they are the *emergent* result of Pac-Man freezing for
 # one game tick per regular dot eaten (three ticks for a power pellet). We
@@ -113,7 +136,7 @@ OPEN_IN_CHASE = True
 # positive value keeps a brief opening scatter instead of removing it.
 OPENING_SCATTER_OVERRIDE_SECONDS = 0.0
 
-# --- Frightened duration & flash count, per level (Dossier Table A.1) -----------
+# --- Reference frightened timing (Dossier Table A.1; not the live difficulty) --
 # Deliberately non-monotonic (levels 6, 10, and 14 jump back up) -- this is
 # real, confirmed independently by two clones, not a transcription error.
 # Levels 17, 19, 20, and 21+ are genuinely 0 seconds (no frightened mode).
@@ -205,11 +228,11 @@ BUTTON_A = 1
 BUTTON_X = 2
 BUTTON_Y = 3
 BUTTON_COIN = 4
-BUTTON_P1 = 5  # "go back one level" (main menu -> exit; anywhere else -> main menu), per the club's cross-game arcade contract
+BUTTON_P1 = 5  # pause/resume in a run; back elsewhere; exit only at the main menu
 BUTTON_SELECT = 8
 BUTTON_START = 9
 
-CONFIRM_BUTTONS = (BUTTON_A, BUTTON_START)
+CONFIRM_BUTTONS = (BUTTON_START,)
 # The single "go back one level" action is aliased across two buttons on
 # the cabinet: P1 (5, the club's cross-game back/exit button) and B (0,
 # the natural back partner to A/1 in this cabinet's layout). They are

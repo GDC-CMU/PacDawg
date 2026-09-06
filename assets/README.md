@@ -48,19 +48,30 @@ it will simply be rescaled).
 
 ### Scotty -- the player character
 
-Scotty is a small, shaggy Scottish Terrier: **CMU's mascot**, not a
-yellow circle. He has two animation frames per facing direction (a
-simple "legs/mouth" alternation used for the walk animation):
+Scotty combines a rounded chomp silhouette with **CMU's Scottish Terrier**:
+small upright ears, a blunt muzzle, shaggy beard, warm dark coat, and red
+bandana. Frame **1 is mouth closed**, and frame **2 is mouth open**.
+
+The aligned, transparent originals are `assets/artwork/scotty-mouth-closed.png`
+and `assets/artwork/scotty-mouth-open.png`. They remain editable PNGs; no vector
+or drawing library is needed by the game. Regenerate the 20x20 directional
+sprites and 16x16 life icon from these originals without altering other sprites:
+
+```
+python tools/generate_placeholders.py --scotty-only
+```
+
+Both frames share one crop and anchor. Left-facing art is mirrored; up/down
+art is rotated. Runtime filenames, nominal tile sizes, and collision geometry
+do not change.
 
 **Contrast is not optional.** The maze field is black -- correctly, to
 match the arcade genre -- which means Scotty has to carry all of the
 contrast himself, since nothing behind him will help. On the cabinet,
 viewed from a few feet under fair lighting, Scotty must read as **the
 single most legible sprite on screen**, more so than any ghost. The
-committed placeholder is a warm cream/tan ("wheaten") coat for exactly
-this reason: a traditional solid-black Scottie photographed or drawn
-straight became a dark blob nearly invisible against the black field.
-When supplying real art:
+new dark-coat art uses a bright warm outline, readable eye and red bandana to
+stay visible against the black field. When supplying replacement art:
 
 - Keep Scotty light/bright enough (or give him a strong bright rim
   light/outline if he must stay dark) that he's still the most readable

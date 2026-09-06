@@ -23,14 +23,15 @@ and name are not, and this project doesn't reproduce them.
   -- see [Attract mode](#attract-mode).
 - A dedicated **How to Play** screen covering arcade and keyboard
   controls, the ghost cast, scoring, and what power pellets do.
-- Four campus-themed mazes-worth of original layouts (**The Cut**, **The
+- A **Pause** menu with Resume selected by default and a deliberate
+  Main Menu option. The entire run freezes until resumed.
+- Three campus-themed original layouts (**The Cut**, **The
   Fence**, **Skibo**), cycling forever and speeding up as you go.
 - Four ghosts with genuinely different targeting algorithms (not one
   rule recolored four times) -- see [Design notes](#design-notes).
-- Movement speeds, per-level timing, scatter/chase/frightened durations,
-  Cruise Elroy, and ghost-house release logic are transcribed from
-  documented Pac-Man (1980) ROM-derived data, scaled to our maze size --
-  see [Difficulty is documented, not invented](#difficulty-is-documented-not-invented).
+- A **gentle first maze with automatic difficulty progression**: slower,
+  staggered ghosts and longer power pellets at first, increasing after each
+  cleared maze. See [Tuning difficulty](#tuning-difficulty).
 - A proper scatter/chase/frightened state machine, power pellets, combo
   scoring for eating multiple ghosts in one frightened window, bonus
   fruit themed after the Skibo Cafe menu, lives, an extra life at
@@ -57,21 +58,22 @@ and name are not, and this project doesn't reproduce them.
 | Input | Action |
 |---|---|
 | Joystick (either connected stick), axis 0/1 | Steer Scotty / navigate the menu |
-| Button 1 (A) or Button 9 (Start) | Confirm / select the highlighted menu entry |
-| **Button 5 (P1) or Button 0 (B)** | **Back one level** -- main menu -> exit to the gallery; anywhere else -> main menu |
+| Button 9 (Start) | Start a run / select the highlighted menu entry |
+| Button 1 (A) | Wake the demo / visitor activity only; never starts or confirms |
+| **Button 5 (P1) or Button 0 (B)** | **Pause / resume** during a run; back from help/results/demo; exit to the gallery only at the main menu |
 
-The cabinet has two identical joystick devices; either one can steer.
+The cabinet has two identical joystick devices; either one can steer, start,
+or pause/resume.
 Hot-plugging (disconnecting/reconnecting a stick mid-game) is handled
 without crashing.
 
 The main menu (shown on launch and again after every game over) is a
 real, navigable menu -- **Start Game**, **How to Play**, **Exit to
 Gallery** -- moved with axis 1 up/down (or arrows/WASD) and confirmed
-with A/Start/Enter/Space, with the selected entry given a solid,
+with Start/Enter/Space, with the selected entry given a solid,
 high-contrast highlight bar rather than a subtle tint so it reads from
-several feet away. It's also the one place that tells a visitor P1
-exits to the launcher's gallery, since the gallery itself doesn't say
-so. **Exit to Gallery** does exactly what P1 does. **How to Play** is a
+several feet away. **Exit to Gallery** does exactly what P1 does at
+the root menu. **How to Play** is a
 full screen covering controls, the ghost cast, scoring, and power
 pellets; P1/B/Esc/Backspace (or confirm) return to the menu.
 
@@ -81,39 +83,34 @@ pellets; P1/B/Esc/Backspace (or confirm) return to the menu.
 |---|---|
 | Arrow keys or WASD | Steer Scotty / navigate the menu |
 | Enter / Space | Confirm / select |
-| Esc or Backspace | Back one level -- same as P1/B on the cabinet |
+| Esc or Backspace | Pause / resume or back -- same as P1/B on the cabinet |
 
-### P1 goes back one level, everywhere
+### Pause, resume, and returning to the gallery
 
-This is a cross-game convention for the club's arcade cabinet, not a
-PacDawg-specific quirk: **P1 always means "go back one level," never
-"quit immediately."** Esc and Backspace on the keyboard, and button B
-(0) on the cabinet, are exactly equivalent aliases of that same single
-action -- all four controls do the same thing on every screen:
+P1, B, Esc, and Backspace are equivalent. They never quit an active run
+directly:
 
 - **Main menu** -- back exits to the gallery (`sys.exit(0)`), since the
   menu is the top level with nothing above it.
-- **Every other screen** -- HOW TO PLAY, or any state of a game in
-  progress -- back returns to the main menu. A game in progress is
-  treated as abandoned: the high score is committed so nothing earned
-  is lost, and starting again always begins a genuinely fresh game.
+- **Ready, playing, dying, or level clear** -- back opens **PAUSED**,
+  with **Resume** selected. Start/Enter/Space selects; back resumes
+  regardless of which choice is highlighted.
+- **Paused** -- positions, pellets, score/lives, phase countdowns,
+  fruit/frightened/release/mode timers, sprite animation, and gameplay RNG
+  stay frozen. Resume continues the exact saved phase, without saving
+  the score or resetting a countdown. Attract mode never runs here.
+- **Main Menu in pause** -- deliberately abandons the run and commits
+  the high score using the existing rules. It does **not** exit to the
+  launcher. Selecting Start Game afterward creates a fresh run.
+- **How to Play, game over, or demo** -- back returns to the main menu;
+  Start/Enter/Space also returns from help/results.
 
-So leaving from mid-game takes two presses (back to the menu, then back
-again to exit) rather than one. That's deliberate: it makes an
-accidental press recoverable instead of instantly dumping a visitor out
-of the game. A visitor mid-game gets a small, quiet "P1: MENU" reminder
-tucked in the HUD's corner, since the title screen's legend is no
-longer on screen at that point.
-
-A held P1/Esc/B/Backspace can't chain two level changes in a row --
-e.g. holding it to leave gameplay can't also be read as a fresh press
-the instant the menu appears, which would otherwise dump a visitor
-straight out of the game on a single hold. See
-`Game.maybe_go_back()`'s armed/disarmed latch (tracked against the raw
-physical signal, not against what it currently does) for how that's
-guarded, on top of the same startup input-residue protection described
-below. No reachable state can trap a visitor: repeated back presses
-from anywhere always reach process exit in at most two presses.
+Each transition consumes its input. Held Back cannot pause/resume/exit
+repeatedly; held Start cannot dismiss help/results or activate the next
+menu. Release before pressing again. Menu steering held when starting or
+resuming must return to neutral before steering the game. The same guards
+apply at process startup. Prompts follow the active keyboard or gamepad;
+the help screen lists the aliases for that device.
 
 ## Attract mode
 
@@ -136,10 +133,10 @@ configured deadzone -- ends the demo immediately and returns to the
 main menu; a drifting/noisy stick at rest does not count, so a dirty
 cabinet stick can't prevent attract mode from ever starting. The idle
 timer re-arms every time the menu is (re)entered, from anywhere,
-including right after a demo ends. P1/Esc/B/Backspace behave exactly
-as they do from gameplay: one level back, to the menu -- the same
-"back one level" contract described above, since the demo counts as
-one level below the menu, same as a game in progress.
+including right after a demo ends. P1/Esc/B/Backspace return from demo
+directly to the menu, never to pause. Start, A, and steering also wake
+the demo, but that wake-up input is consumed before menu activation.
+Holding A keeps the menu awake without starting a run.
 
 The demo cannot touch real game state. `Game._enter_demo()` saves the
 real `ScoreBoard` aside untouched and swaps in a disposable one (seeded
@@ -187,10 +184,9 @@ title overlay are deliberately suppressed for these captures (see
 redundant clutter inside a card that already names the game.
 
 It's fully deterministic -- rerunning it leaves `git status` clean --
-via a fixed RNG seed, a fixed simulated frame delta (never real
-elapsed time), and a synthetic clock substituted for
-`pygame.time.get_ticks()` so walk-cycle animation timing can't vary
-between runs either. The manifest lists the captured frames forward
+via a fixed RNG seed and a fixed simulated frame delta (never real
+elapsed time). `Game.update()` advances the game's sprite clock, so
+walk-cycle animation timing can't vary between runs either. The manifest lists the captured frames forward
 then backward (a "ping-pong" sequence) rather than looping straight
 back to frame 0, so the loop never jump-cuts: since the demo is
 continuously moving, every step in that sequence -- including the
@@ -243,9 +239,9 @@ layouts being rejected loudly), each ghost personality picking a
 different target from identical game state, the scatter/chase/frightened
 state machine, scoring and the ghost-eating combo, pellet accounting and
 level completion, asset fallback behavior, working-directory
-independence, and the arcade back-one-level contract (800x600 display,
-P1/Esc/B/Backspace always reach process exit within two presses from
-any state).
+independence, and the arcade contract (800x600 display, deliberate root
+exit, exact pause/RNG preservation in all active phases, Start-only
+confirmation, both controllers, and held-input transition guards).
 
 ## How it's deployed
 
@@ -257,19 +253,19 @@ and maze path is resolved from `__file__` rather than the current
 working directory -- the game has to work no matter where the launcher
 runs it from.
 
-P1 (and Esc/B/Backspace) always go back one level -- main menu exits
-via `sys.exit(0)`, everywhere else returns to the main menu -- per this
-club's cross-game arcade convention. That means the launcher's
+P1 (and Esc/B/Backspace) pause/resume active runs, return from
+help/results/demo, and exit via `sys.exit(0)` only at the main menu.
+That means the launcher's
 documented "reclaim control" path is still exactly `sys.exit(0)` from
 the main menu; it's just no longer one press away from every state, by
-design (see "P1 goes back one level, everywhere" above).
+design (see "Pause, resume, and returning to the gallery" above).
 
 The gallery is left with its own select button (button 1/A, or Enter)
 still physically held down -- that's how the visitor picked PacDawg --
 and our process can see that held state the instant we open the
 joystick/keyboard. `Game.init_display()` flushes any queued startup
 events and then seeds our pressed-button/key tracking directly from live
-hardware state, so an already-held control must be released once before
+hardware state, including Start/9, so an already-held control must be released once before
 it can register as a fresh press; a short settle window
 (`config.INPUT_SETTLE_SECONDS`) additionally ignores menu confirm for a
 moment at startup as a second layer of defense. None of this ever
@@ -285,35 +281,50 @@ not code, so it's trivial to hand real assets to an artist later. See
 [`assets/README.md`](assets/README.md) for the full sprite reference --
 every expected file, its nominal size, and what it's used for. The short
 version: **overwrite a file in `assets/sprites/` with the same name and
-you're done, no code changes required.** Everything currently there is a
-deterministically-generated placeholder (`tools/generate_placeholders.py`),
-not final art.
+you're done, no code changes required.** Scotty's rounded closed/open mouth
+originals are also supplied in `assets/artwork/`. To derive all four directions
+and the life icon from those two files without touching other art, run:
+
+```
+python tools/generate_placeholders.py --scotty-only
+```
 
 ## Tuning difficulty
 
 Every tunable knob -- speeds, scatter/chase timing, frightened duration,
 ghost house release timing, scoring, the extra-life threshold, fruit
 thresholds -- lives in one place: [`pacdawg/config.py`](pacdawg/config.py).
-Nothing else in the codebase hard-codes a difficulty number.
+`DIFFICULTY_BY_LEVEL` contains ten stages; clearing a maze advances one stage.
+Losing a life or pausing does not change the stage. A new game starts at level
+1, and level 10's limits remain in force when the maze layouts repeat.
 
-## Difficulty is documented, not invented
+| Level | Scotty speed | Ghost speed | Power-pellet duration |
+|---|---|---|---|
+| 1 | 75% | 45% | 12 seconds |
+| 2 | 78% | 52% | 11 seconds |
+| 3 | 81% | 59% | 10 seconds |
+| 4 | 84% | 66% | 9 seconds |
+| 5 | 86% | 73% | 8 seconds |
+| 6 | 88% | 79% | 7 seconds |
+| 7 | 90% | 84% | 6 seconds |
+| 8 | 90% | 88% | 5 seconds |
+| 9 | 90% | 92% | 4 seconds |
+| 10+ | 90% | 95% | 3 seconds |
 
-Every speed, timing, and threshold in `config.py` is transcribed from
-Jamey Pittman's *The Pac-Man Dossier* (a ROM-disassembly-derived
-reference), cross-checked against Don Hodges' Z80 analysis and two
-high-fidelity open-source clones -- not estimated. The base speed
-(9.4697 tiles/sec at 100%), per-level speed bands, scatter/chase
-timetable (including the ~17-minute third chase and the pause while any
-ghost is frightened), frightened duration/flash counts (including the
-documented non-monotonic jumps at levels 6, 10, and 14), Cruise Elroy,
-and the ghost-house release counters all carry a comment citing the
-source. Every documented value that's expressed as an absolute dot count
-(Elroy thresholds, ghost-house release counters, fruit triggers) is
-scaled proportionally to our maze's actual pellet count, since our mazes
-aren't the original's 244-dot 28x36 grid. A handful of values the Dossier
-itself flags as undocumented (eaten-ghost "eyes" speed, in-house pacing
-speed) follow the same estimates the reference clones use, noted in
-`config.py` as such.
+Percentages use the existing 9.4697-tiles/second reference scale. Ghost releases
+are also staggered more generously in the early mazes. Even Gates' end-of-maze
+speed-up stays below Scotty's normal speed on level 1. Power pellets retain a
+short useful window on late levels instead of unexpectedly stopping working.
+
+### Reference mechanics and deliberate difficulty choices
+
+The live difficulty curve above is a deliberate cabinet design choice, not a
+claim to reproduce the original ROM's difficulty. Reference data from Jamey
+Pittman's *The Pac-Man Dossier* remains in `config.py` for the base speed,
+scatter/chase schedules, original thresholds, and non-threatening eyes/house
+movement. The ghost personalities, cornering advantage, scoring, revived-ghost
+dwell, and chase-on-exit behavior remain intact. Dot thresholds are scaled to
+our actual maze sizes.
 
 Scotty's controls follow the documented cornering/pre-turn model rather
 than a timed input buffer: a held direction is re-evaluated every frame
@@ -336,7 +347,7 @@ pacdawg/
   levels.py              the original CMU-themed layouts + per-level tuning
   entities.py            Scotty + tile-aligned movement, tunnels
   ghosts.py              four personalities + scatter/chase/frightened machine
-  game.py                state machine: menu -> how to play -> ready -> play -> death -> ...
+  game.py                state machine: menu -> help -> ready -> play -> death; pause/resume
   demo_ai.py             the attract-mode demo's simple self-playing controller
   score.py               scoring, lives, extra life, high-score persistence
   input.py               joystick + keyboard intent resolution

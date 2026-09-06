@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import unittest
+from unittest.mock import patch
 
 from pacdawg import config, levels
 from pacdawg.game import Game, GameState, MENU_ITEMS, MENU_EXIT_TO_GALLERY, MENU_HOW_TO_PLAY, MENU_START_GAME
@@ -35,17 +36,22 @@ class GhostHouseReleaseTests(unittest.TestCase):
         gates = self.game.ghosts["gates"]
         self.assertNotEqual(gates.mode, GhostMode.HOUSE)
 
-    def test_hunt_has_zero_limit_and_leaves_almost_immediately(self):
-        # Hunt/Pinky's personal dot limit is 0 at every level: it should
-        # release within the first few frames of PLAYING, with zero dots
-        # eaten.
+    def test_hunt_waits_for_the_beginner_release_threshold(self):
         hunt = self.game.ghosts["hunt"]
-        self.assertIn(hunt.mode, (GhostMode.LEAVING, GhostMode.CHASE, GhostMode.SCATTER))
+        self.assertEqual(hunt.mode, GhostMode.HOUSE)
+        limit = levels.personal_dot_limit(1, "hunt", self.game.maze.total_pellets)
+        for _ in range(limit):
+            self.game._on_dot_eaten()
+            self.game._release_ghosts_if_due()
+        self.assertNotEqual(hunt.mode, GhostMode.HOUSE)
 
     def test_personal_counter_releases_wean_after_enough_pellets(self):
         wean = self.game.ghosts["wean"]
         self.assertEqual(wean.mode, GhostMode.HOUSE)  # not yet -- needs pellets
-        limit = levels.personal_dot_limit(1, "wean", self.game.maze.total_pellets)
+        limit = sum(
+            levels.personal_dot_limit(1, name, self.game.maze.total_pellets)
+            for name in ("hunt", "wean")
+        )
         for _ in range(limit):
             self.game._on_dot_eaten()
             self.game._release_ghosts_if_due()
@@ -56,9 +62,8 @@ class GhostHouseReleaseTests(unittest.TestCase):
         self.assertEqual(doherty.mode, GhostMode.HOUSE)
         timeout = levels.ghost_release_timeout_seconds(self.game.score.level)
         _run_frames(self.game, int(timeout * 60) + 120)
-        # Hunt and Wean should be out (zero/low limits); the anti-starvation
-        # timer should also have forced further releases without any
-        # pellets ever being eaten.
+        # The timeout still releases the first waiting ghost if no dots
+        # are eaten; a gentler opening must not permanently trap the house.
         self.assertNotEqual(self.game.ghosts["hunt"].mode, GhostMode.HOUSE)
 
 
@@ -265,11 +270,15 @@ class MainMenuTests(unittest.TestCase):
 
 class GoBackOneLevelTests(unittest.TestCase):
     """P1, Esc, Backspace, and button B are all equivalent aliases of a
-    single "go back one level" action, used identically everywhere: from
-    the main menu they exit to the gallery; from every other state
-    (including HOW_TO_PLAY and a game in progress) they return to the
-    main menu, treating any in-progress game as abandoned.
+    single back action: pause/resume a run, exit at the main menu,
+    and return to the menu from help/results/demo.
     """
+
+    def setUp(self):
+        # Navigation tests must not alter the checkout's real visitor high score.
+        save_patch = patch("pacdawg.score.save_high_score")
+        save_patch.start()
+        self.addCleanup(save_patch.stop)
 
     @staticmethod
     def _frame(game, raw, dt=1 / 60.0):
@@ -316,7 +325,7 @@ class GoBackOneLevelTests(unittest.TestCase):
             self.fail("P1 exited the process directly from HOW_TO_PLAY")
         self.assertEqual(game.state, GameState.ATTRACT)
 
-    def test_p1_from_gameplay_lands_on_the_menu_and_does_not_exit(self):
+    def test_p1_from_gameplay_pauses_and_does_not_exit(self):
         game = Game(rng=random.Random(47))
         game.new_game()
         game.state = GameState.PLAYING
@@ -324,7 +333,7 @@ class GoBackOneLevelTests(unittest.TestCase):
             self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
         except SystemExit:
             self.fail("P1 exited the process directly from PLAYING")
-        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.state, GameState.PAUSED)
 
     def test_p1_from_game_over_lands_on_the_menu(self):
         game = Game(rng=random.Random(48))
@@ -349,22 +358,19 @@ class GoBackOneLevelTests(unittest.TestCase):
             self._frame(game, RawInput(pressed_keys=frozenset({"escape"})))
         self.assertEqual(cm.exception.code, 0)
 
-    def test_two_p1_presses_with_a_release_between_leave_the_gallery(self):
-        # The intended two-press flow from mid-game: once back to the
-        # menu, once more to exit -- never a single accidental quit.
+    def test_two_p1_presses_with_a_release_between_resume_the_run(self):
         game = Game(rng=random.Random(49))
         game.new_game()
         game.state = GameState.PLAYING
         p1 = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
         self._frame(game, p1)
-        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.state, GameState.PAUSED)
         self._frame(game, RawInput())  # release, so the second press is a fresh edge
-        with self.assertRaises(SystemExit) as cm:
-            self._frame(game, p1)
-        self.assertEqual(cm.exception.code, 0)
+        self._frame(game, p1)
+        self.assertEqual(game.state, GameState.PLAYING)
 
     def test_a_single_held_p1_press_never_skips_a_level(self):
-        # One held press must land on the menu and stay there -- it must
+        # One held press must land on pause and stay there -- it must
         # never fall straight through to process exit in the same hold.
         game = Game(rng=random.Random(50))
         game.new_game()
@@ -375,7 +381,7 @@ class GoBackOneLevelTests(unittest.TestCase):
                 self._frame(game, held_p1)
         except SystemExit:
             self.fail("a single held P1 press skipped straight to process exit")
-        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.state, GameState.PAUSED)
 
     def test_held_escape_through_the_how_to_play_transition_does_not_chain_into_exit(self):
         # Regression: a single Esc press/hold that carries the game back
@@ -414,6 +420,9 @@ class GoBackOneLevelTests(unittest.TestCase):
         game.score.score = game.score.high_score + 500
         abandoned_score = game.score.score
         self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
+        self.assertEqual(game.state, GameState.PAUSED)
+        self._frame(game, RawInput(pressed_keys=frozenset({"down"})))
+        self._frame(game, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(game.state, GameState.ATTRACT)
         self.assertEqual(game.score.high_score, abandoned_score)
 
@@ -424,6 +433,8 @@ class GoBackOneLevelTests(unittest.TestCase):
         game.score.score = 1234
         game.score.lives = 1
         self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
+        self._frame(game, RawInput(pressed_keys=frozenset({"down"})))
+        self._frame(game, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(game.state, GameState.ATTRACT)
         self._frame(game, RawInput())  # release before the fresh confirm press
         self._frame(game, RawInput(pressed_keys=frozenset({"return"})))
@@ -587,8 +598,8 @@ class HeldButtonAtStartupTests(unittest.TestCase):
 
     def test_release_then_genuine_press_after_seeded_hold_still_starts(self):
         game = Game(rng=random.Random(32))
-        game._seed_input_state(set(), {config.BUTTON_A})
-        held = RawInput(pressed_buttons=frozenset({config.BUTTON_A}))
+        game._seed_input_state(set(), {config.BUTTON_START})
+        held = RawInput(pressed_buttons=frozenset({config.BUTTON_START}))
         for _ in range(40):
             game.update(1 / 60.0, held)
         game.update(1 / 60.0, RawInput())  # visitor releases the stale button

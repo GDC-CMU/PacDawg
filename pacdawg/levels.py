@@ -7,7 +7,7 @@ reproduce the layout of any existing maze-chase game.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, NamedTuple, Tuple
 
 from . import config
 from .maze import Maze
@@ -131,7 +131,21 @@ def _clamped_index(length: int, level: int) -> int:
     return min(max(level, 1) - 1, length - 1)
 
 
-# --- Speed lookups (Dossier Table A.1 percentages of BASE_SPEED_TILES_PER_SEC) --
+class Difficulty(NamedTuple):
+    player_pct: int
+    ghost_pct: int
+    frightened_seconds: float
+    release_timeout: float
+    house_dot_limits: Tuple[int, int, int]
+
+
+def difficulty_for_level(level: int) -> Difficulty:
+    """A gentler first maze, increasing once per clear and capped at the last tier."""
+    table = config.DIFFICULTY_BY_LEVEL
+    return Difficulty(*table[_clamped_index(len(table), level)])
+
+
+# --- Speed lookups: live difficulty curve; reference bands retained for eyes/house --
 def _level_band_index(level: int) -> int:
     """0 = level 1, 1 = levels 2-4, 2 = levels 5-20, 3 = levels 21+."""
     level = max(level, 1)
@@ -149,41 +163,43 @@ def _pct_to_speed(pct: float) -> float:
 
 
 def pacman_normal_speed(level: int) -> float:
-    return _pct_to_speed(config.PACMAN_NORMAL_PCT_BY_BAND[_level_band_index(level)])
+    return _pct_to_speed(difficulty_for_level(level).player_pct)
 
 
 def pacman_frightened_speed(level: int) -> float:
-    return _pct_to_speed(config.PACMAN_FRIGHTENED_PCT_BY_BAND[_level_band_index(level)])
+    return _pct_to_speed(min(100, difficulty_for_level(level).player_pct + config.POWER_PLAYER_BONUS_PCT))
 
 
 def ghost_normal_speed(level: int) -> float:
-    return _pct_to_speed(config.GHOST_NORMAL_PCT_BY_BAND[_level_band_index(level)])
+    return _pct_to_speed(difficulty_for_level(level).ghost_pct)
 
 
 def ghost_frightened_speed(level: int) -> float:
-    return _pct_to_speed(config.GHOST_FRIGHTENED_PCT_BY_BAND[_level_band_index(level)])
+    return ghost_normal_speed(level) * config.FRIGHTENED_SPEED_FRACTION
 
 
 def ghost_tunnel_speed(level: int) -> float:
-    return _pct_to_speed(config.GHOST_TUNNEL_PCT_BY_BAND[_level_band_index(level)])
+    return ghost_normal_speed(level) * config.TUNNEL_SPEED_FRACTION
 
 
 def elroy1_speed(level: int) -> float:
-    return _pct_to_speed(config.ELROY_1_PCT_BY_BAND[_level_band_index(level)])
+    return _pct_to_speed(difficulty_for_level(level).ghost_pct + config.ELROY_BONUS_PCT[0])
 
 
 def elroy2_speed(level: int) -> float:
-    return _pct_to_speed(config.ELROY_2_PCT_BY_BAND[_level_band_index(level)])
+    return _pct_to_speed(difficulty_for_level(level).ghost_pct + config.ELROY_BONUS_PCT[1])
 
 
 def eyes_speed(level: int) -> float:
-    """Undocumented by the Dossier; both reference clones estimate ~1.5x."""
-    return ghost_normal_speed(level) * config.EYES_SPEED_MULTIPLIER
+    """Returning eyes stay brisk even when chasing ghosts are beginner-slow."""
+    reference = _pct_to_speed(config.GHOST_NORMAL_PCT_BY_BAND[_level_band_index(level)])
+    return reference * config.EYES_SPEED_MULTIPLIER
 
 
 def house_pace_speed(level: int) -> float:
-    """Undocumented by the Dossier; both reference clones estimate ~0.5x."""
-    return ghost_normal_speed(level) * config.HOUSE_PACE_SPEED_MULTIPLIER
+    """Keep the non-threatening house animation independent of chase difficulty."""
+    reference = _pct_to_speed(config.GHOST_NORMAL_PCT_BY_BAND[_level_band_index(level)])
+    return reference * config.HOUSE_PACE_SPEED_MULTIPLIER
 
 
 # --- Scatter / chase timetable ---------------------------------------------------
@@ -235,13 +251,12 @@ def _apply_opening_chase_override(
 
 # --- Frightened duration / flashing ------------------------------------------------
 def frightened_seconds_for_level(level: int) -> float:
-    table = config.FRIGHTENED_SECONDS_BY_LEVEL
-    return float(table[_clamped_index(len(table), level)])
+    return difficulty_for_level(level).frightened_seconds
 
 
 def frightened_flashes_for_level(level: int) -> int:
-    table = config.FRIGHTENED_FLASHES_BY_LEVEL
-    return int(table[_clamped_index(len(table), level)])
+    duration = frightened_seconds_for_level(level)
+    return min(config.POWER_WARNING_FLASHES, int(duration / (2 * config.FRIGHTENED_FLASH_TOGGLE_SECONDS)))
 
 
 # --- Dot-count scaling (our maze isn't the original's 244-dot 28x36 grid) ---------
@@ -261,32 +276,29 @@ def elroy_thresholds_for_level(level: int, total_pellets: int) -> Tuple[int, int
     return stage1, stage2
 
 
+def _house_dot_limits(level: int) -> Dict[str, int]:
+    return dict(zip(("hunt", "wean", "doherty"), difficulty_for_level(level).house_dot_limits))
+
+
 def personal_dot_limit(level: int, ghost_name: str, total_pellets: int) -> int:
     """Scaled ghost-house personal dot limit for one ghost at one level."""
-    if level == 1:
-        table = config.PERSONAL_DOT_LIMITS_BY_LEVEL[1]
-    elif level == 2:
-        table = config.PERSONAL_DOT_LIMITS_BY_LEVEL[2]
-    else:
-        table = config.PERSONAL_DOT_LIMITS_BY_LEVEL["3+"]
-    raw = table.get(ghost_name, 0)
+    raw = _house_dot_limits(level).get(ghost_name, 0)
     if raw == 0:
         return 0
     return max(1, round(raw * _dot_scale(total_pellets)))
 
 
-def global_dot_counter_threshold(ghost_name: str, total_pellets: int) -> int:
+def global_dot_counter_threshold(ghost_name: str, total_pellets: int, level: int = 1) -> int:
     """Scaled global ghost-house dot-counter threshold (used after a life
     is lost, in place of the personal counters)."""
-    raw = config.GLOBAL_DOT_COUNTER_THRESHOLDS[ghost_name]
+    raw = max(config.GLOBAL_DOT_COUNTER_THRESHOLDS[ghost_name], _house_dot_limits(level)[ghost_name])
     return max(1, round(raw * _dot_scale(total_pellets)))
 
 
 def ghost_release_timeout_seconds(level: int) -> float:
     """Anti-starvation timer: the most-preferred waiting ghost is released
     if this many seconds pass without Scotty eating a dot."""
-    band = "1-4" if level <= 4 else "5+"
-    return config.GHOST_RELEASE_TIMEOUT_SECONDS_BY_BAND[band]
+    return difficulty_for_level(level).release_timeout
 
 
 # --- Fruit -------------------------------------------------------------------------

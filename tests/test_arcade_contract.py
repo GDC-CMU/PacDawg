@@ -4,7 +4,7 @@
 - P1 (button 5), Esc, Backspace, and button B are all aliases of a
   single "go back one level" action, per this club's cross-game arcade
   contract: from the main menu it exits via ``sys.exit(0)``; from every
-  other state it returns to the main menu.
+  help/result/demo state it returns to the main menu. Active runs pause/resume.
 - The game must survive hundreds of simulated frames without crashing,
   including full runs through every input direction and state.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import random
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -20,7 +21,7 @@ import pygame  # noqa: E402
 
 from pacdawg import config  # noqa: E402
 from pacdawg.entities import Direction  # noqa: E402
-from pacdawg.game import Game, GameState  # noqa: E402
+from pacdawg.game import ACTIVE_STATES, Game, GameState  # noqa: E402
 from pacdawg.input import RawInput  # noqa: E402
 
 
@@ -34,13 +35,20 @@ class DisplayContractTests(unittest.TestCase):
         screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
         self.assertEqual(screen.get_size(), (800, 600))
 
+    def test_default_display_retains_scaled_fullscreen_and_windowed_alias(self):
+        for windowed in (False, True):
+            game = Game()
+            with patch("pacdawg.config.windowed_requested", return_value=windowed), \
+                 patch("pygame.display.set_mode", return_value=pygame.Surface((800, 600))) as mode, \
+                 patch("pygame.joystick.get_count", return_value=0), \
+                 patch.object(game, "_seed_input_state_from_hardware"):
+                game.init_display()
+            expected = pygame.SCALED | (0 if windowed else pygame.FULLSCREEN)
+            mode.assert_called_once_with((800, 600), expected)
+
 
 class BackOneLevelContractTests(unittest.TestCase):
-    """P1/Esc/Backspace/B are equivalent everywhere: from the main menu
-    they exit to the gallery; from every other state they return to the
-    main menu (never straight out of the process). No reachable state
-    may leave a visitor stuck -- repeated presses always eventually
-    reach process exit."""
+    """Back exits only at the root; abandoning a run is a deliberate choice."""
 
     def test_p1_from_the_main_menu_exits_with_code_zero(self):
         game = Game(rng=random.Random(0))
@@ -50,7 +58,7 @@ class BackOneLevelContractTests(unittest.TestCase):
             game.maybe_go_back(raw)
         self.assertEqual(cm.exception.code, 0)
 
-    def test_p1_from_every_other_state_returns_to_the_menu_not_exit(self):
+    def test_p1_from_every_other_state_never_exits(self):
         raw = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
         for state in GameState:
             if state is GameState.ATTRACT:
@@ -60,13 +68,17 @@ class BackOneLevelContractTests(unittest.TestCase):
                 game.new_game()
                 if state is GameState.DEMO:
                     game._enter_demo()
+                elif state is GameState.PAUSED:
+                    game._pause_game()
                 else:
                     game.state = state
                 try:
                     game.maybe_go_back(raw)
                 except SystemExit:
                     self.fail(f"P1 exited the process directly from {state}")
-                self.assertEqual(game.state, GameState.ATTRACT)
+                expected = (GameState.PAUSED if state in ACTIVE_STATES else
+                            GameState.READY if state is GameState.PAUSED else GameState.ATTRACT)
+                self.assertEqual(game.state, expected)
 
     def test_escape_key_mirrors_p1_exactly(self):
         raw = RawInput(pressed_keys=frozenset({"escape"}))
@@ -82,7 +94,7 @@ class BackOneLevelContractTests(unittest.TestCase):
             game2.maybe_go_back(raw)
         except SystemExit:
             self.fail("Esc exited the process directly from PLAYING")
-        self.assertEqual(game2.state, GameState.ATTRACT)
+        self.assertEqual(game2.state, GameState.PAUSED)
 
     def test_no_go_back_without_a_back_input(self):
         game = Game(rng=random.Random(0))
@@ -102,11 +114,7 @@ class BackOneLevelContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             game.maybe_go_back(raw)
 
-    def test_from_any_state_repeated_p1_presses_eventually_exit(self):
-        # Property test: no reachable state can trap a visitor. Two
-        # presses (with a release between, so each is a fresh edge)
-        # suffice from anywhere, since the deepest the state machine
-        # goes is one level below the menu.
+    def test_from_any_state_deliberate_menu_then_back_can_exit(self):
         press = RawInput(pressed_buttons=frozenset({config.BUTTON_P1}))
         release = RawInput()
         for state in GameState:
@@ -115,18 +123,27 @@ class BackOneLevelContractTests(unittest.TestCase):
                 game.new_game()
                 if state is GameState.DEMO:
                     game._enter_demo()
+                elif state is GameState.PAUSED:
+                    game._pause_game()
                 else:
                     game.state = state
                 exited = False
                 for _ in range(4):
                     try:
-                        game.maybe_go_back(press)
+                        if game.state is GameState.PAUSED:
+                            game.maybe_go_back(release)
+                            game.update(0.0, release)
+                            game.pause_index = 1
+                            game.update(0.0, RawInput(pressed_buttons=frozenset({config.BUTTON_START})))
+                        else:
+                            game.maybe_go_back(press)
+                            game.update(0.0, press)
                     except SystemExit as exc:
                         self.assertEqual(exc.code, 0)
                         exited = True
                         break
                     game.maybe_go_back(release)
-                self.assertTrue(exited, f"P1 never reached process exit from {state}")
+                self.assertTrue(exited, f"deliberate exit was unreachable from {state}")
 
 
 class HeadlessStabilityTests(unittest.TestCase):

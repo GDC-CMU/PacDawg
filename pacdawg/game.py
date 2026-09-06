@@ -32,6 +32,7 @@ class GameState(Enum):
     PLAYING = auto()
     DYING = auto()
     LEVEL_CLEAR = auto()
+    PAUSED = auto()
     GAME_OVER = auto()
     DEMO = auto()  # self-playing attract-mode demo, entered after idling on ATTRACT
 
@@ -46,6 +47,8 @@ MENU_START_GAME = "START GAME"
 MENU_HOW_TO_PLAY = "HOW TO PLAY"
 MENU_EXIT_TO_GALLERY = "EXIT TO GALLERY"
 MENU_ITEMS = (MENU_START_GAME, MENU_HOW_TO_PLAY, MENU_EXIT_TO_GALLERY)
+PAUSE_ITEMS = ("RESUME", "MAIN MENU")
+ACTIVE_STATES = (GameState.READY, GameState.PLAYING, GameState.DYING, GameState.LEVEL_CLEAR)
 
 # Ghost-house release preference order (Dossier Ch. 2): only the single
 # most-preferred ghost still waiting inside accrues a dot counter at a
@@ -95,6 +98,14 @@ class Game:
         self.menu_index = 0
         self._menu_last_direction: Optional[Direction] = None
         self._menu_last_confirm = False
+        self.pause_index = 0
+        self.paused_state: Optional[GameState] = None
+        self.pause_ui_time = 0.0
+        self.paused_using_gamepad = False
+        self.gameplay_time = 0.0  # sprite clock: never advances while paused
+        self._transition_pending = False
+        self._gameplay_direction_blocked = False
+        self.using_gamepad = False
 
         # Attract mode: how long the main menu has sat with no genuine
         # input (see config.DEMO_IDLE_SECONDS and _any_genuine_input()).
@@ -111,6 +122,7 @@ class Game:
         self.joysticks: Dict[int, "pygame.joystick.Joystick"] = {}
         self.pressed_keys: Set[str] = set()
         self.pressed_buttons: Set[int] = set()
+        self._buttons_by_joystick: Dict[int, Set[int]] = {}
 
         # Startup input-residue guard (see config.INPUT_SETTLE_SECONDS):
         # the gallery may hand us a still-held select button, so confirm
@@ -133,6 +145,8 @@ class Game:
         return Scotty(col, row, levels.pacman_normal_speed(level))
 
     def new_game(self) -> None:
+        self.paused_state = None
+        self.gameplay_time = 0.0
         self.score = ScoreBoard()
         self._start_level(1)
         self.state = GameState.READY
@@ -182,6 +196,22 @@ class Game:
         if self._input_settle_remaining > 0.0:
             self._input_settle_remaining = max(0.0, self._input_settle_remaining - dt)
 
+        if raw.pressed_buttons or any(input_mod.axis_direction(x, y) for x, y in raw.axes):
+            self.using_gamepad = True
+        elif raw.pressed_keys:
+            self.using_gamepad = False
+
+        # run() checks back BEFORE update(). Neither navigation nor simulation
+        # may see that same transition frame, including the resume frame's dt.
+        if self._transition_pending:
+            self._transition_pending = False
+            return
+
+        if self.state is GameState.PAUSED:
+            self.pause_ui_time += dt
+            self._update_pause(raw)
+            return
+
         if self.state is GameState.ATTRACT:
             if self._any_genuine_input(raw):
                 self._menu_idle_seconds = 0.0
@@ -196,14 +226,28 @@ class Game:
         if self.state is GameState.DEMO:
             if self._any_genuine_input(raw):
                 self._exit_demo()
+                self._consume_transition_input(raw)
                 return
+            self.gameplay_time += dt
             self._update_demo(dt)
             return
 
         if self.state is GameState.HOW_TO_PLAY:
             if self._menu_confirm_pressed(raw):  # also allowed, friendlier than back-only
                 self._return_to_menu_abandoning_game()
+                self._consume_transition_input(raw)
             return
+
+        if self.state in ACTIVE_STATES:
+            # Track confirm even during play: a held Start must not activate
+            # a result or pause menu reached later.
+            self._menu_last_confirm = input_mod.wants_confirm(raw)
+            self.gameplay_time += dt
+            if self._gameplay_direction_blocked:
+                if input_mod.resolve_direction(raw) is None:
+                    self._gameplay_direction_blocked = False
+                else:
+                    raw = RawInput(pressed_buttons=raw.pressed_buttons)
 
         if self.state is GameState.READY:
             self.state_timer -= dt
@@ -243,6 +287,7 @@ class Game:
         if self.state is GameState.GAME_OVER:
             if self._menu_confirm_pressed(raw):
                 self._return_to_menu_abandoning_game()
+                self._consume_transition_input(raw)
             return
 
     # -- main menu / how to play --------------------------------------------------
@@ -254,6 +299,40 @@ class Game:
             self.menu_index = (self.menu_index + 1) % len(MENU_ITEMS)
         if self._menu_confirm_pressed(raw):
             self._activate_menu_item()
+            self._consume_transition_input(raw)
+
+    def _consume_transition_input(self, raw: RawInput, skip_update: bool = False) -> None:
+        """Seed destination edges from the transition's actual held controls."""
+        self._menu_last_confirm = input_mod.wants_confirm(raw)
+        self._menu_last_direction = input_mod.resolve_direction(raw)
+        self._back_armed = not input_mod.wants_go_back(raw)
+        self._gameplay_direction_blocked = self._menu_last_direction is not None
+        self._transition_pending = skip_update
+
+    def _pause_game(self) -> None:
+        self.paused_state = self.state
+        self.paused_using_gamepad = self.using_gamepad
+        self.state = GameState.PAUSED
+        self.pause_index = 0
+        self.pause_ui_time = 0.0
+
+    def _resume_game(self) -> None:
+        if self.paused_state is not None:
+            self.state = self.paused_state
+            self.paused_state = None
+
+    def _update_pause(self, raw: RawInput) -> None:
+        direction = self._menu_direction_pressed(raw)
+        if direction is Direction.UP:
+            self.pause_index = (self.pause_index - 1) % len(PAUSE_ITEMS)
+        elif direction is Direction.DOWN:
+            self.pause_index = (self.pause_index + 1) % len(PAUSE_ITEMS)
+        if self._menu_confirm_pressed(raw):
+            if self.pause_index == 0:
+                self._resume_game()
+            else:
+                self._return_to_menu_abandoning_game()
+            self._consume_transition_input(raw)
 
     def _menu_direction_pressed(self, raw: RawInput) -> Optional[Direction]:
         """Edge-triggered steer: fires only the frame a *new* direction is
@@ -302,6 +381,7 @@ class Game:
             input_mod.resolve_direction(raw) is not None
             or input_mod.wants_confirm(raw)
             or input_mod.wants_go_back(raw)
+            or config.BUTTON_A in raw.pressed_buttons
         )
 
     def _enter_demo(self) -> None:
@@ -463,7 +543,9 @@ class Game:
             ghost = self.ghosts.get(name)
             if ghost is None or not self._house_ready(ghost):
                 continue
-            threshold = levels.global_dot_counter_threshold(name, self.maze.total_pellets)
+            threshold = levels.global_dot_counter_threshold(
+                name, self.maze.total_pellets, level=self.score.level
+            )
             if self._global_dot_counter >= threshold:
                 ghost.release()
                 if name == "doherty":
@@ -588,39 +670,12 @@ class Game:
 
     # -- back-one-level contract ---------------------------------------------------
     def maybe_go_back(self, raw: RawInput) -> None:
-        """P1, Esc, Backspace, and button B are all equivalent aliases of
-        a single "go back one level" action (this club's cross-game
-        arcade contract), used identically from *every* state:
+        """B/P1/Esc/Backspace pause or resume a run; help/result/demo
+        return one level to the menu; only the root menu exits.
 
-        - From the main menu (ATTRACT), back means exit to the gallery
-          (``sys.exit(0)``) -- there is nothing above the menu to go
-          back to, so this is still the launcher's documented top-level
-          quit path.
-        - From every other state -- HOW_TO_PLAY, the self-playing DEMO
-          (see _exit_demo()), or any state of a game in progress
-          (READY/PLAYING/DYING/LEVEL_CLEAR/GAME_OVER) -- back returns to
-          the main menu, treating a game in progress as abandoned (see
-          _return_to_menu_abandoning_game()). DEMO is one level below
-          the menu, exactly like gameplay.
-
-        So leaving mid-game takes two presses: once back to the menu,
-        once more to exit. That is deliberate -- it makes an accidental
-        press recoverable instead of instantly dumping a visitor out.
-
-        Edge-triggered with a single armed/disarmed latch tracked
-        against the raw physical signal (not against what it currently
-        does): it disarms every frame any of the four controls is held
-        and re-arms the instant none of them are, regardless of state.
-        That one mechanism guards two residue problems: (1) a control
-        already held over from process startup (see init_display())
-        can't cause an instant unwanted level change, and (2) holding
-        the same physical control through a state transition (e.g.
-        gameplay -> menu) can't chain straight through a *second*
-        transition (menu -> exit) in the same hold -- it must be seen
-        released and pressed again. This matters more now than it used
-        to: a chained double-transition here would take a visitor from
-        gameplay straight out of the game, which is exactly what the
-        two-press design exists to prevent.
+        Track the raw held signal across every screen and startup. A
+        release is required before another back edge, and update() must
+        consume the transition frame before doing anything on its destination.
         """
         active = input_mod.wants_go_back(raw)
         was_armed = self._back_armed
@@ -633,8 +688,13 @@ class Game:
             self._exit_to_gallery()
         elif self.state is GameState.DEMO:
             self._exit_demo()
+        elif self.state in ACTIVE_STATES:
+            self._pause_game()
+        elif self.state is GameState.PAUSED:
+            self._resume_game()
         else:
             self._return_to_menu_abandoning_game()
+        self._consume_transition_input(raw, skip_update=True)
 
     def _return_to_menu_abandoning_game(self) -> None:
         """Shared "go back to the main menu" landing spot for every
@@ -648,6 +708,7 @@ class Game:
         genuinely fresh run; nothing about the abandoned game leaks
         forward."""
         self.score.commit_high_score()
+        self.paused_state = None
         self.state = GameState.ATTRACT
         self.menu_index = 0
         self._menu_idle_seconds = 0.0
@@ -658,6 +719,8 @@ class Game:
         via sys.exit(0) -- the documented contract the launcher relies
         on to reclaim control."""
         self.score.commit_high_score()
+        from . import render
+        render.clear_caches()
         try:
             pygame.quit()
         except Exception:
@@ -707,11 +770,15 @@ class Game:
         except Exception:
             pass  # headless/dummy video driver may not support key state
         pressed_buttons = set()
-        for joy in self.joysticks.values():
+        self._buttons_by_joystick.clear()
+        for instance_id, joy in self.joysticks.items():
             try:
+                held = set()
                 for button in range(joy.get_numbuttons()):
                     if joy.get_button(button):
-                        pressed_buttons.add(button)
+                        held.add(button)
+                self._buttons_by_joystick[instance_id] = held
+                pressed_buttons.update(held)
             except pygame.error:
                 continue  # device vanished mid-enumeration; ignore
         self._seed_input_state(pressed_keys, pressed_buttons)
@@ -734,6 +801,7 @@ class Game:
         self._menu_last_direction = input_mod.resolve_direction(seeded)
         self._back_armed = not input_mod.wants_go_back(seeded)
         self._input_settle_remaining = config.INPUT_SETTLE_SECONDS
+        self.using_gamepad = bool(self.joysticks or pressed_buttons)
 
     def _read_axes(self) -> tuple:
         axes = []
@@ -752,6 +820,7 @@ class Game:
             joy = pygame.joystick.Joystick(device_index)
             joy.init()
             self.joysticks[joy.get_instance_id()] = joy
+            self.using_gamepad = True
         except pygame.error:
             pass  # device vanished between enumeration and init; ignore
 
@@ -765,14 +834,18 @@ class Game:
             elif event.type == pygame.KEYUP:
                 self.pressed_keys.discard(pygame.key.name(event.key))
             elif event.type == pygame.JOYBUTTONDOWN:
-                self.pressed_buttons.add(event.button)
+                self._buttons_by_joystick.setdefault(event.instance_id, set()).add(event.button)
             elif event.type == pygame.JOYBUTTONUP:
-                self.pressed_buttons.discard(event.button)
+                self._buttons_by_joystick.setdefault(event.instance_id, set()).discard(event.button)
             elif event.type == pygame.JOYDEVICEADDED:
                 self._add_joystick(event.device_index)
             elif event.type == pygame.JOYDEVICEREMOVED:
                 self.joysticks.pop(event.instance_id, None)
+                self._buttons_by_joystick.pop(event.instance_id, None)
+                if not self.joysticks:
+                    self.using_gamepad = False
 
+        self.pressed_buttons = set().union(*self._buttons_by_joystick.values())
         return RawInput(
             axes=self._read_axes(),
             pressed_keys=frozenset(self.pressed_keys),

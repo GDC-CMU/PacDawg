@@ -72,7 +72,7 @@ class ConfirmExitTests(unittest.TestCase):
                 self.assertTrue(input_mod.wants_confirm(RawInput(pressed_keys=frozenset({key}))))
 
     def test_confirm_via_arcade_buttons(self):
-        self.assertTrue(input_mod.wants_confirm(RawInput(pressed_buttons=frozenset({config.BUTTON_A}))))
+        self.assertFalse(input_mod.wants_confirm(RawInput(pressed_buttons=frozenset({config.BUTTON_A}))))
         self.assertTrue(input_mod.wants_confirm(RawInput(pressed_buttons=frozenset({config.BUTTON_START}))))
 
     def test_go_back_via_keyboard_or_arcade_buttons(self):
