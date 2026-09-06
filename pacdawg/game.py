@@ -48,6 +48,7 @@ MENU_HOW_TO_PLAY = "HOW TO PLAY"
 MENU_EXIT_TO_GALLERY = "EXIT TO GALLERY"
 MENU_ITEMS = (MENU_START_GAME, MENU_HOW_TO_PLAY, MENU_EXIT_TO_GALLERY)
 PAUSE_ITEMS = ("RESUME", "MAIN MENU")
+RESULT_ITEMS = ("PLAY AGAIN", "MAIN MENU")
 ACTIVE_STATES = (GameState.READY, GameState.PLAYING, GameState.DYING, GameState.LEVEL_CLEAR)
 
 # Ghost-house release preference order (Dossier Ch. 2): only the single
@@ -81,6 +82,9 @@ class Game:
         self.life_elapsed = 0.0
         self.last_ghost_eaten_points: Optional[int] = None
         self.last_ghost_eaten_at: float = -999.0
+        self.last_power_at = -999.0
+        self.last_power_tile: Optional[Coord] = None
+        self.last_extra_life_at = -999.0
 
         # Ghost-house release bookkeeping (Dossier Ch. 2, "Home Sweet Home").
         self.dot_counter_mode = "personal"  # or "global", after a life is lost
@@ -99,6 +103,7 @@ class Game:
         self._menu_last_direction: Optional[Direction] = None
         self._menu_last_confirm = False
         self.pause_index = 0
+        self.result_index = 0
         self.paused_state: Optional[GameState] = None
         self.pause_ui_time = 0.0
         self.paused_using_gamepad = False
@@ -147,12 +152,15 @@ class Game:
     def new_game(self) -> None:
         self.paused_state = None
         self.gameplay_time = 0.0
-        self.score = ScoreBoard()
+        # Preserve even an in-memory best if persistence is unavailable.
+        self.score = ScoreBoard(high_score=max(self.score.high_score, self.score.score))
+        self.result_index = 0
         self._start_level(1)
         self.state = GameState.READY
         self.state_timer = READY_SECONDS
 
     def _start_level(self, level: int) -> None:
+        self._reset_feedback()
         self.score.level = level
         self.maze = levels.build_maze(level)
         self.player = self._make_player(self.maze, level)
@@ -160,6 +168,7 @@ class Game:
         self.scatter_clock = ScatterChaseClock(levels.scatter_chase_timetable_for_level(level))
         self.fruit_active = False
         self.fruit_tile = None
+        self.fruit_timer = 0.0
         self.fruit_thresholds_hit = set()
         self.life_elapsed = 0.0
         self.dot_counter_mode = "personal"
@@ -170,6 +179,7 @@ class Game:
         self.elroy_unlocked = True
 
     def _reset_positions_same_level(self) -> None:
+        self._reset_feedback()
         col, row = self.maze.player_start
         self.player.teleport(col, row, Direction.NONE)
         self.player.speed = levels.pacman_normal_speed(self.score.level)
@@ -190,6 +200,24 @@ class Game:
         self._global_dot_counter = 0
         self._time_since_last_pellet = 0.0
         self.elroy_unlocked = False
+
+    def _reset_feedback(self) -> None:
+        """One slot per meaningful event, cleared across lives/mazes/runs."""
+        self.last_ghost_eaten_points = None
+        self.last_ghost_eaten_at = -999.0
+        self.last_power_at = -999.0
+        self.last_power_tile = None
+        self.last_extra_life_at = -999.0
+
+    def _collect_and_collide(self, dt: float) -> bool:
+        """Keep reward order/RNG identical; observe a life award before death."""
+        lives_before = self.score.lives
+        self._handle_pellets()
+        self._handle_fruit(dt)
+        caught = self._handle_ghost_collisions()
+        if self.score.lives > lives_before:
+            self.last_extra_life_at = self.gameplay_time
+        return caught
 
     # -- pure per-frame update --------------------------------------------------
     def update(self, dt: float, raw: RawInput) -> None:
@@ -273,6 +301,8 @@ class Game:
                     self.score.commit_high_score()
                     self.state = GameState.GAME_OVER
                     self.state_timer = 0.0
+                    self.result_index = 0
+                    self._consume_transition_input(raw)
             return
 
         if self.state is GameState.LEVEL_CLEAR:
@@ -285,8 +315,14 @@ class Game:
             return
 
         if self.state is GameState.GAME_OVER:
+            direction = self._menu_direction_pressed(raw)
+            if direction in (Direction.UP, Direction.DOWN):
+                self.result_index = (self.result_index + 1) % len(RESULT_ITEMS)
             if self._menu_confirm_pressed(raw):
-                self._return_to_menu_abandoning_game()
+                if self.result_index == 0:
+                    self.new_game()
+                else:
+                    self._return_to_menu_abandoning_game()
                 self._consume_transition_input(raw)
             return
 
@@ -455,9 +491,7 @@ class Game:
         for ghost in self.ghosts.values():
             ghost.update(self.maze, dt, self.player, self.ghosts, self.scatter_clock.phase, self.rng)
 
-        self._handle_pellets()
-        self._handle_fruit(dt)
-        if self._handle_ghost_collisions():
+        if self._collect_and_collide(dt):
             self._restart_demo()
             return
 
@@ -493,9 +527,7 @@ class Game:
         for ghost in self.ghosts.values():
             ghost.update(self.maze, dt, self.player, self.ghosts, self.scatter_clock.phase, self.rng)
 
-        self._handle_pellets()
-        self._handle_fruit(dt)
-        if self._handle_ghost_collisions():
+        if self._collect_and_collide(dt):
             self._on_player_caught()
             return
 
@@ -594,6 +626,8 @@ class Game:
             self.player.pause(config.DOT_EAT_PAUSE_SECONDS)
             self._on_dot_eaten()
         elif eaten == "power":
+            self.last_power_at = self.gameplay_time
+            self.last_power_tile = (col, row)
             self.score.add_power_pellet()
             self.player.pause(config.POWER_PELLET_EAT_PAUSE_SECONDS)
             self._on_dot_eaten()
@@ -657,7 +691,7 @@ class Game:
             if ghost.mode is GhostMode.FRIGHTENED:
                 ghost.get_eaten()
                 self.last_ghost_eaten_points = self.score.add_ghost_eaten()
-                self.last_ghost_eaten_at = self.life_elapsed
+                self.last_ghost_eaten_at = self.gameplay_time
             else:
                 return True
         return False
@@ -709,8 +743,8 @@ class Game:
         forward."""
         self.score.commit_high_score()
         self.paused_state = None
+        self.menu_index = 1 if self.state is GameState.HOW_TO_PLAY else 0
         self.state = GameState.ATTRACT
-        self.menu_index = 0
         self._menu_idle_seconds = 0.0
 
     def _exit_to_gallery(self) -> None:

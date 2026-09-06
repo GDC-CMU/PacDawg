@@ -45,6 +45,7 @@ def snapshot(game):
         "state_timer", "gameplay_time", "fruit_active", "fruit_tile",
         "fruit_timer", "fruit_thresholds_hit", "life_elapsed",
         "last_ghost_eaten_points", "last_ghost_eaten_at", "dot_counter_mode",
+        "last_power_at", "last_power_tile", "last_extra_life_at",
         "_house_order_index", "_house_dot_counter", "_global_dot_counter",
         "_time_since_last_pellet", "elroy_unlocked",
     )
@@ -213,7 +214,7 @@ class PauseContractTests(unittest.TestCase):
                 frame(game, START)
                 self.assertEqual(game.state, {
                     GameState.ATTRACT: GameState.READY, GameState.PAUSED: GameState.PLAYING,
-                    GameState.HOW_TO_PLAY: GameState.ATTRACT, GameState.GAME_OVER: GameState.ATTRACT,
+                    GameState.HOW_TO_PLAY: GameState.ATTRACT, GameState.GAME_OVER: GameState.READY,
                 }[state])
 
     def test_demo_wake_is_consumed_for_start_a_back_and_stick(self):
@@ -275,7 +276,7 @@ class PauseContractTests(unittest.TestCase):
         frame(game, START)
         for _ in range(40):
             frame(game, START)
-        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.state, GameState.READY)
 
     def test_back_plus_confirm_on_help_cannot_start_a_game(self):
         game = Game()
@@ -286,7 +287,7 @@ class PauseContractTests(unittest.TestCase):
         self.assertEqual(game.state, GameState.ATTRACT)
         frame(game)
         frame(game, START)
-        self.assertEqual(game.state, GameState.READY)
+        self.assertEqual(game.state, GameState.HOW_TO_PLAY)  # focus restored to help
 
     def test_held_back_through_main_menu_and_new_run_requires_release(self):
         for back in BACKS:

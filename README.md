@@ -16,8 +16,8 @@ and name are not, and this project doesn't reproduce them.
 ## What it is
 
 - A real, navigable **main menu** (Start Game / How to Play / Exit to
-  Gallery), not just a "press start" splash -- shown on launch and again
-  after every game over. See [Controls](#controls).
+  Gallery), not just a "press start" splash -- shown on launch, with a
+  direct **Play Again / Main Menu** choice after game over. See [Controls](#controls).
 - A self-playing **attract-mode demo** after 15 seconds of idling on the
   menu -- the real maze, the real ghost AI, a simple self-playing Scotty
   -- see [Attract mode](#attract-mode).
@@ -25,6 +25,8 @@ and name are not, and this project doesn't reproduce them.
   controls, the ghost cast, scoring, and what power pellets do.
 - A **Pause** menu with Resume selected by default and a deliberate
   Main Menu option. The entire run freezes until resumed.
+- Movement-linked two-pose chomp, brief power/combo/extra-life feedback,
+  and readable death/next-maze presentation within the existing countdowns.
 - Three campus-themed original layouts (**The Cut**, **The
   Fence**, **Skibo**), cycling forever and speeding up as you go.
 - Four ghosts with genuinely different targeting algorithms (not one
@@ -38,6 +40,10 @@ and name are not, and this project doesn't reproduce them.
   10,000 points, and a persisted high score.
 - **All gameplay art is swappable PNGs** -- see [Swapping in real
   art](#swapping-in-real-art).
+
+The screenshots below show the earlier baseline presentation; they predate
+the local feedback and Play Again refinement. The derived gallery preview
+uses the current renderer.
 
 ![How to play screen: controls, the ghost cast, and scoring](docs/screenshots/how_to_play_screen.png)
 
@@ -67,7 +73,7 @@ or pause/resume.
 Hot-plugging (disconnecting/reconnecting a stick mid-game) is handled
 without crashing.
 
-The main menu (shown on launch and again after every game over) is a
+The main menu (shown on launch or by choosing Main Menu after a run) is a
 real, navigable menu -- **Start Game**, **How to Play**, **Exit to
 Gallery** -- moved with axis 1 up/down (or arrows/WASD) and confirmed
 with Start/Enter/Space, with the selected entry given a solid,
@@ -75,7 +81,8 @@ high-contrast highlight bar rather than a subtle tint so it reads from
 several feet away. **Exit to Gallery** does exactly what P1 does at
 the root menu. **How to Play** is a
 full screen covering controls, the ghost cast, scoring, and power
-pellets; P1/B/Esc/Backspace (or confirm) return to the menu.
+pellets; P1/B/Esc/Backspace (or confirm) return to the menu with
+**How to Play** still focused.
 
 ### Keyboard (development)
 
@@ -102,8 +109,12 @@ directly:
 - **Main Menu in pause** -- deliberately abandons the run and commits
   the high score using the existing rules. It does **not** exit to the
   launcher. Selecting Start Game afterward creates a fresh run.
-- **How to Play, game over, or demo** -- back returns to the main menu;
-  Start/Enter/Space also returns from help/results.
+- **Game over** -- **Play Again** is selected by default. Start/Enter/Space
+  begins a fresh tier-1 run on The Cut, resetting score, lives, pellets,
+  fruit, combo and feedback while keeping the high score. Up/down selects
+  **Main Menu** instead; back always returns to the main menu.
+- **How to Play or demo** -- back returns to the main menu;
+  Start/Enter/Space also returns from help.
 
 Each transition consumes its input. Held Back cannot pause/resume/exit
 repeatedly; held Start cannot dismiss help/results or activate the next
@@ -111,6 +122,26 @@ menu. Release before pressing again. Menu steering held when starting or
 resuming must return to neutral before steering the game. The same guards
 apply at process startup. Prompts follow the active keyboard or gamepad;
 the help screen lists the aliases for that device.
+
+### Visual feedback
+
+Scotty's existing closed/open poses follow actual distance travelled, closing
+on collection and settling closed at a wall. No movement speed, cornering,
+input latency or pellet pause was changed to make the animation work.
+
+Power pellets get a short local outline and a one-second cue. Ghost combo
+points use the existing last-eaten event in one shared HUD lane for 1.2 seconds,
+not an accumulating cloud of labels. An earned extra life gets a 1.8-second
+cue beside the life strip. Ordinary pellets do not spawn text or particles.
+Death fades the existing sprite and marks the catch locally; maze clear names
+the next maze and difficulty tier. READY, DYING and LEVEL_CLEAR still take
+2, 1.5 and 2 seconds respectively, with no added wait.
+
+All feedback uses the frozen gameplay clock or the existing phase countdown.
+Rendering never mutates the simulation or consumes RNG. Effects have fixed
+slots; maze structure, UI text and sprite transforms have bounded caches.
+Source sprites and artwork, all ten difficulty tiers, and audio are unchanged.
+Native 800x600 rendering and SDL fullscreen letterboxing remain the same.
 
 ## Attract mode
 
@@ -242,6 +273,11 @@ level completion, asset fallback behavior, working-directory
 independence, and the arcade contract (800x600 display, deliberate root
 exit, exact pause/RNG preservation in all active phases, Start-only
 confirmation, both controllers, and held-input transition guards).
+The polish regressions exercise actual movement/pickups/collisions, all four
+combo awards, extra-life/death ordering, pause-frozen event pixels, real
+last-dot clears through all ten tiers, and clean direct retry with keyboard
+aliases and both controller slots. Automated controller events are not a
+substitute for trying physical controls or judging feel locally.
 
 ## How it's deployed
 

@@ -261,11 +261,12 @@ class MainMenuTests(unittest.TestCase):
             game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(cm.exception.code, 0)
 
-    def test_game_over_confirm_returns_to_attract_menu(self):
+    def test_game_over_confirm_retries_directly(self):
         game = Game(rng=random.Random(17))
         game.state = GameState.GAME_OVER
         game.update(1 / 60.0, RawInput(pressed_keys=frozenset({"return"})))
-        self.assertEqual(game.state, GameState.ATTRACT)
+        self.assertEqual(game.state, GameState.READY)
+        self.assertEqual(game.score.level, 1)
 
 
 class GoBackOneLevelTests(unittest.TestCase):

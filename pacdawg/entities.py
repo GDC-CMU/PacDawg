@@ -225,12 +225,28 @@ class Scotty(MovingActor):
         super().__init__(col, row, speed)
         self.facing = Direction.RIGHT  # last non-NONE direction, for animation
         self.pause_timer = 0.0  # brief freeze after eating a (power) pellet
+        self.chomp_travel = 0.0  # cosmetic, bounded to one tile; never drives motion
+        self.moved_this_frame = False
+
+    @property
+    def chomp_frame(self) -> int:
+        """Close on collection/rest; open halfway through each travelled tile."""
+        if self.pause_timer > 0 or not self.moved_this_frame:
+            return 1
+        return 1 + int(self.chomp_travel / 0.5)
+
+    def teleport(self, col: int, row: int, direction: Direction = Direction.NONE) -> None:
+        super().teleport(col, row, direction)
+        self.chomp_travel = 0.0
+        self.moved_this_frame = False
 
     def pause(self, seconds: float) -> None:
         """Freeze movement for a short spell, as when eating a dot."""
         self.pause_timer = max(self.pause_timer, seconds)
+        self.chomp_travel = 0.0
 
     def update(self, maze: Maze, dt: float) -> None:
+        self.moved_this_frame = False
         if self.pause_timer > 0:
             self.pause_timer = max(0.0, self.pause_timer - dt)
             self._steer(maze)  # input still re-sampled during the freeze
@@ -303,6 +319,8 @@ class Scotty(MovingActor):
                     break  # no legal move from here; stay put this frame
 
             travel = min(remaining, primary_distance)
+            self.chomp_travel = (self.chomp_travel + travel) % 1.0
+            self.moved_this_frame = self.moved_this_frame or travel > _EPSILON
             sign = 1.0 if target_value >= primary_value else -1.0
             setattr(self, primary_attr, primary_value + sign * travel)
             remaining -= travel
