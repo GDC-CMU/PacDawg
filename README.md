@@ -92,6 +92,12 @@ pellets; P1/B/Esc/Backspace (or confirm) return to the menu with
 | Enter / Space | Confirm / select |
 | Esc or Backspace | Pause / resume or back -- same as P1/B on the cabinet |
 
+For overlapping arrow/WASD keys, the newest genuinely pressed direction wins;
+releasing it falls back to the previous held direction. Key-repeat events do
+not steal priority. Already-held keys at startup use a stable up/down/left/right
+fallback because their original press order is unknown. Joystick priority,
+deadzone and Scotty's movement/cornering rules are unchanged.
+
 ### Pause, resume, and returning to the gallery
 
 P1, B, Esc, and Backspace are equivalent. They never quit an active run
@@ -106,6 +112,9 @@ directly:
   fruit/frightened/release/mode timers, sprite animation, and gameplay RNG
   stay frozen. Resume continues the exact saved phase, without saving
   the score or resetting a countdown. Attract mode never runs here.
+- **How to Play in pause** -- opens the existing controls/rules screen without
+  abandoning the run. Everything remains frozen. Confirm or back returns to
+  **PAUSED**, with How to Play still focused; only Resume/back from pause resumes.
 - **Main Menu in pause** -- deliberately abandons the run and commits
   the high score using the existing rules. It does **not** exit to the
   launcher. Selecting Start Game afterward creates a fresh run.
@@ -113,8 +122,8 @@ directly:
   begins a fresh tier-1 run on The Cut, resetting score, lives, pellets,
   fruit, combo and feedback while keeping the high score. Up/down selects
   **Main Menu** instead; back always returns to the main menu.
-- **How to Play or demo** -- back returns to the main menu;
-  Start/Enter/Space also returns from help.
+- **Root-menu How to Play or demo** -- back returns to the main menu;
+  Start/Enter/Space also returns from root-menu help.
 
 Each transition consumes its input. Held Back cannot pause/resume/exit
 repeatedly; held Start cannot dismiss help/results or activate the next
@@ -131,7 +140,9 @@ input latency or pellet pause was changed to make the animation work.
 
 Power pellets get a short local outline and a one-second cue. Ghost combo
 points use the existing last-eaten event in one shared HUD lane for 1.2 seconds,
-not an accumulating cloud of labels. An earned extra life gets a 1.8-second
+not an accumulating cloud of labels. While active, a larger power/combo cue
+temporarily replaces the secondary HIGH statistic; it restores automatically,
+without moving the score, level or life indicators. An earned extra life gets a 1.8-second
 cue beside the life strip. Ordinary pellets do not spawn text or particles.
 Death fades the existing sprite and marks the catch locally; maze clear names
 the next maze and difficulty tier. READY, DYING and LEVEL_CLEAR still take

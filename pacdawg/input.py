@@ -30,7 +30,8 @@ CONFIRM_KEYS = frozenset({"return", "enter", "space"})
 # "Go back one level" -- Esc and Backspace on the keyboard, or button P1
 # (5)/B (0) on the cabinet. All four are equivalent aliases of a single
 # action (see Game.maybe_go_back()): active runs pause/resume, the main
-# menu exits to the gallery, and help/results/demo return to the menu. There is no
+# menu exits to the gallery, and help returns to its parent menu (pause or root).
+# Results/demo return to the root menu. There is no
 # separate "exit" concept any more -- P1 no longer means "quit
 # immediately from anywhere", it means "go back", exactly like Esc.
 BACK_KEYS = frozenset({"escape", "backspace"})
@@ -48,6 +49,8 @@ class RawInput:
     axes: Tuple[Tuple[float, float], ...] = field(default_factory=tuple)
     pressed_keys: FrozenSet[str] = frozenset()
     pressed_buttons: FrozenSet[int] = frozenset()
+    # Oldest -> newest genuine directional key-down; held repeats do not reorder.
+    keyboard_order: Tuple[str, ...] = ()
 
 
 def axis_direction(axis_x: float, axis_y: float, deadzone: float = None) -> Optional[Direction]:
@@ -66,10 +69,14 @@ def axis_direction(axis_x: float, axis_y: float, deadzone: float = None) -> Opti
     return None
 
 
-def keyboard_direction(pressed_keys) -> Optional[Direction]:
-    for key in pressed_keys:
-        direction = KEY_DIRECTIONS.get(key)
-        if direction is not None:
+def keyboard_direction(pressed_keys, keyboard_order=()) -> Optional[Direction]:
+    for key in reversed(keyboard_order):
+        if key in pressed_keys and key in KEY_DIRECTIONS:
+            return KEY_DIRECTIONS[key]
+    # Startup hardware snapshots cannot tell which key went down first.
+    # Use a stable fallback, also for synthetic RawInput without event history.
+    for key, direction in KEY_DIRECTIONS.items():
+        if key in pressed_keys:
             return direction
     return None
 
@@ -80,7 +87,7 @@ def resolve_direction(raw: RawInput) -> Optional[Direction]:
         direction = axis_direction(axis_x, axis_y)
         if direction is not None:
             return direction
-    return keyboard_direction(raw.pressed_keys)
+    return keyboard_direction(raw.pressed_keys, raw.keyboard_order)
 
 
 def wants_confirm(raw: RawInput) -> bool:
@@ -93,7 +100,7 @@ def wants_go_back(raw: RawInput) -> bool:
     """The single "go back one level" intent: Esc, Backspace, button P1
     (5), or button B (0). All four are exactly equivalent everywhere in
     the game -- see Game.maybe_go_back() for pause/resume during a run,
-    exit at the main menu, and back to the menu on help/results/demo."""
+    exit at the main menu, and back to the parent menu on help/results/demo."""
     if raw.pressed_keys & BACK_KEYS:
         return True
     return bool(raw.pressed_buttons & (set(config.EXIT_BUTTONS) | set(config.BACK_BUTTONS)))

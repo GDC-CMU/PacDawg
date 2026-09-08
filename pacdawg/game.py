@@ -47,7 +47,7 @@ MENU_START_GAME = "START GAME"
 MENU_HOW_TO_PLAY = "HOW TO PLAY"
 MENU_EXIT_TO_GALLERY = "EXIT TO GALLERY"
 MENU_ITEMS = (MENU_START_GAME, MENU_HOW_TO_PLAY, MENU_EXIT_TO_GALLERY)
-PAUSE_ITEMS = ("RESUME", "MAIN MENU")
+PAUSE_ITEMS = ("RESUME", MENU_HOW_TO_PLAY, "MAIN MENU")
 RESULT_ITEMS = ("PLAY AGAIN", "MAIN MENU")
 ACTIVE_STATES = (GameState.READY, GameState.PLAYING, GameState.DYING, GameState.LEVEL_CLEAR)
 
@@ -126,6 +126,7 @@ class Game:
         self.clock = None
         self.joysticks: Dict[int, "pygame.joystick.Joystick"] = {}
         self.pressed_keys: Set[str] = set()
+        self._keyboard_direction_order = []
         self.pressed_buttons: Set[int] = set()
         self._buttons_by_joystick: Dict[int, Set[int]] = {}
 
@@ -262,7 +263,7 @@ class Game:
 
         if self.state is GameState.HOW_TO_PLAY:
             if self._menu_confirm_pressed(raw):  # also allowed, friendlier than back-only
-                self._return_to_menu_abandoning_game()
+                self._close_help()
                 self._consume_transition_input(raw)
             return
 
@@ -364,11 +365,21 @@ class Game:
         elif direction is Direction.DOWN:
             self.pause_index = (self.pause_index + 1) % len(PAUSE_ITEMS)
         if self._menu_confirm_pressed(raw):
-            if self.pause_index == 0:
+            item = PAUSE_ITEMS[self.pause_index]
+            if item == "RESUME":
                 self._resume_game()
+            elif item == MENU_HOW_TO_PLAY:
+                self.state = GameState.HOW_TO_PLAY
             else:
                 self._return_to_menu_abandoning_game()
             self._consume_transition_input(raw)
+
+    def _close_help(self) -> None:
+        """Help opened from pause returns there, with the run still frozen."""
+        if self.paused_state is not None:
+            self.state = GameState.PAUSED
+        else:
+            self._return_to_menu_abandoning_game()
 
     def _menu_direction_pressed(self, raw: RawInput) -> Optional[Direction]:
         """Edge-triggered steer: fires only the frame a *new* direction is
@@ -704,8 +715,9 @@ class Game:
 
     # -- back-one-level contract ---------------------------------------------------
     def maybe_go_back(self, raw: RawInput) -> None:
-        """B/P1/Esc/Backspace pause or resume a run; help/result/demo
-        return one level to the menu; only the root menu exits.
+        """B/P1/Esc/Backspace pause or resume a run. Help returns to its
+        parent (pause or root menu); result/demo return to the root menu.
+        Only the root menu exits.
 
         Track the raw held signal across every screen and startup. A
         release is required before another back edge, and update() must
@@ -726,6 +738,8 @@ class Game:
             self._pause_game()
         elif self.state is GameState.PAUSED:
             self._resume_game()
+        elif self.state is GameState.HOW_TO_PLAY:
+            self._close_help()
         else:
             self._return_to_menu_abandoning_game()
         self._consume_transition_input(raw, skip_update=True)
@@ -825,6 +839,7 @@ class Game:
         display or joystick device.
         """
         self.pressed_keys = set(pressed_keys)
+        self._keyboard_direction_order.clear()
         self.pressed_buttons = set(pressed_buttons)
         seeded = RawInput(
             axes=self._read_axes(),
@@ -864,9 +879,15 @@ class Game:
             if event.type == pygame.QUIT:
                 self.pressed_keys.add("escape")
             elif event.type == pygame.KEYDOWN:
-                self.pressed_keys.add(pygame.key.name(event.key))
+                key = pygame.key.name(event.key)
+                if key not in self.pressed_keys and key in input_mod.KEY_DIRECTIONS:
+                    self._keyboard_direction_order.append(key)
+                self.pressed_keys.add(key)
             elif event.type == pygame.KEYUP:
-                self.pressed_keys.discard(pygame.key.name(event.key))
+                key = pygame.key.name(event.key)
+                self.pressed_keys.discard(key)
+                if key in self._keyboard_direction_order:
+                    self._keyboard_direction_order.remove(key)
             elif event.type == pygame.JOYBUTTONDOWN:
                 self._buttons_by_joystick.setdefault(event.instance_id, set()).add(event.button)
             elif event.type == pygame.JOYBUTTONUP:
@@ -884,6 +905,7 @@ class Game:
             axes=self._read_axes(),
             pressed_keys=frozenset(self.pressed_keys),
             pressed_buttons=frozenset(self.pressed_buttons),
+            keyboard_order=tuple(self._keyboard_direction_order),
         )
 
     def run(self) -> None:

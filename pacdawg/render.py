@@ -298,26 +298,29 @@ def _draw_how_to_play_screen(screen, game: Game) -> None:
     _center_text_at(screen, _font(24), "Ghost chain  200 / 400 / 800 / 1600", HUD_TEXT_COLOR, 478)
     _center_text_at(screen, _font(22), "Extra life at 10,000 points", HUD_ACCENT_COLOR, 504)
     select, back = _controls(game)
-    _center_text_at(screen, _font(24), f"{select} / {back}  Main Menu", UI_MUTED_COLOR, 550)
+    destination = "Back to Pause" if game.paused_state is not None else "Main Menu"
+    _center_text_at(screen, _font(24), f"{select} / {back}  {destination}", UI_MUTED_COLOR, 550)
 
 
 def _draw_pause_screen(screen, game: Game) -> None:
     screen.blit(_veil(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, 110), (0, 0))
-    _panel(screen, (168, 128, 464, 352))
-    _center_text_at(screen, _font(48), "PAUSED", HUD_ACCENT_COLOR, 174)
-    _text_at(screen, _maze_label(game.score.level), 22, UI_MUTED_COLOR, (400, 218))
+    _panel(screen, (168, 84, 464, 432))
+    _center_text_at(screen, _font(48), "PAUSED", HUD_ACCENT_COLOR, 128)
+    _text_at(screen, _maze_label(game.score.level), 22, UI_MUTED_COLOR, (400, 172))
     for i, item in enumerate(PAUSE_ITEMS):
-        _draw_menu_item(screen, _font(32), item, HUD_TEXT_COLOR, 268 + i * 62, i == game.pause_index)
-    if game.pause_index == 1:
-        _center_text_at(screen, _font(22), "Ends this run; keeps your high score.", UI_MUTED_COLOR, 382)
-    else:
-        _text_at(screen, "Continue from this exact moment.", 22, UI_MUTED_COLOR, (400, 382))
+        _draw_menu_item(screen, _font(32), item, HUD_TEXT_COLOR, 232 + i * 62, i == game.pause_index)
+    context = {
+        "RESUME": "Continue from this exact moment.",
+        "HOW TO PLAY": "Review controls and rules; the run stays paused.",
+        "MAIN MENU": "Ends this run; keeps your high score.",
+    }[PAUSE_ITEMS[game.pause_index]]
+    _text_at(screen, context, 22, UI_MUTED_COLOR, (400, 412))
     select, back = _controls(game)
     # A one-time, restrained prompt fade uses only the pause UI clock.
     # Nothing in the gameplay backdrop depends on elapsed wall time.
     shade = 182 + round(30 * min(1.0, game.pause_ui_time / 0.15))
-    _center_text_at(screen, _font(22), f"{select}  Select     {back}  Resume", (shade,) * 3, 434)
-    _text_at(screen, f"{_navigation_hint(game)}  Choose", 20, UI_MUTED_COLOR, (400, 459))
+    _center_text_at(screen, _font(22), f"{select}  Select     {back}  Resume", (shade,) * 3, 462)
+    _text_at(screen, f"{_navigation_hint(game)}  Choose", 20, UI_MUTED_COLOR, (400, 488))
 
 
 def _draw_game_over_screen(screen, game: Game) -> None:
@@ -344,9 +347,10 @@ def _draw_hud(screen, game: Game, total_time: float = 0.0, phase=None) -> None:
     score_surface = _font_text(small, f"SCORE {game.score.score:06d}", HUD_TEXT_COLOR)
     screen.blit(score_surface, (16, 10))
 
-    high_surface = _font_text(small, f"HIGH {game.score.high_score:06d}", HUD_ACCENT_COLOR)
-    high_rect = high_surface.get_rect(midtop=(config.SCREEN_WIDTH // 2, 10))
-    screen.blit(high_surface, high_rect)
+    if _reward_caption(game) is None:
+        high_surface = _font_text(small, f"HIGH {game.score.high_score:06d}", HUD_ACCENT_COLOR)
+        high_rect = high_surface.get_rect(midtop=(config.SCREEN_WIDTH // 2, 10))
+        screen.blit(high_surface, high_rect)
 
     if phase is GameState.DEMO:
         # "LEVEL" isn't meaningful for the demo -- a restrained, slowly
@@ -396,10 +400,11 @@ def _draw_feedback(screen, game: Game, phase: GameState) -> None:
         radius = 12 + round(14 * power_age / 0.55)
         pygame.draw.circle(screen, POWER_COLOR, (round(x + 10), round(y + 10)), radius, 1)
 
-    # A single top-strip event lane avoids obscuring the maze or stacking labels.
+    # Temporarily replace the secondary HIGH statistic, not score/level/lives.
+    # One larger event caption fits inside the unchanged 40px HUD strip.
     caption = _reward_caption(game)
     if caption is not None:
-        _text_at(screen, caption[0], 20, caption[1], (400, 31))
+        _text_at(screen, caption[0], 28, caption[1], (400, 20))
 
     if 0 <= now - game.last_extra_life_at < LIFE_FEEDBACK_SECONDS:
         _text_at(screen, "+1 LIFE", 22, HUD_ACCENT_COLOR, (400, 590))

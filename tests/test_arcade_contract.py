@@ -133,7 +133,7 @@ class BackOneLevelContractTests(unittest.TestCase):
                         if game.state is GameState.PAUSED:
                             game.maybe_go_back(release)
                             game.update(0.0, release)
-                            game.pause_index = 1
+                            game.pause_index = 2  # Main Menu, after How to Play
                             game.update(0.0, RawInput(pressed_buttons=frozenset({config.BUTTON_START})))
                         else:
                             game.maybe_go_back(press)

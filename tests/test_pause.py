@@ -28,6 +28,7 @@ BACKS = (
     RawInput(pressed_keys=frozenset({"backspace"})),
 )
 DOWN = RawInput(axes=((0.0, 0.0), (0.0, 1.0)))
+UP = RawInput(axes=((0.0, 0.0), (0.0, -1.0)))
 
 
 def frame(game, raw=IDLE, dt=1 / 60.0):
@@ -115,7 +116,7 @@ class PauseContractTests(unittest.TestCase):
                     self.assertEqual(game.state, GameState.PAUSED)
                     self.assertEqual(snapshot(game), before)
                     self.assertGreater(game.pause_ui_time, config.DEMO_IDLE_SECONDS)
-                    # Back resumes even when the destructive option is selected.
+                    # Back resumes even when another option is selected.
                     frame(game, back, 0.25)
                     self.assertEqual(game.state, phase)
                     self.assertEqual(snapshot(game), before)
@@ -145,7 +146,7 @@ class PauseContractTests(unittest.TestCase):
         old_objects = (game.player, game.maze, game.score)
         frame(game, BACKS[0])
         self.save.assert_not_called()
-        frame(game, DOWN)
+        frame(game, UP)  # wrap to Main Menu, past the new How to Play option
         frame(game, START)
         self.assertEqual(game.state, GameState.ATTRACT)
         self.assertIsNone(game.paused_state)
@@ -293,7 +294,7 @@ class PauseContractTests(unittest.TestCase):
         for back in BACKS:
             game = self.active_game()
             frame(game, back)
-            frame(game, RawInput(axes=DOWN.axes, pressed_keys=back.pressed_keys,
+            frame(game, RawInput(axes=UP.axes, pressed_keys=back.pressed_keys,
                                  pressed_buttons=back.pressed_buttons))
             combo = RawInput(pressed_keys=back.pressed_keys,
                              pressed_buttons=back.pressed_buttons | START.pressed_buttons)

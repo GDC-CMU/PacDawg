@@ -422,7 +422,7 @@ class GoBackOneLevelTests(unittest.TestCase):
         abandoned_score = game.score.score
         self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
         self.assertEqual(game.state, GameState.PAUSED)
-        self._frame(game, RawInput(pressed_keys=frozenset({"down"})))
+        self._frame(game, RawInput(pressed_keys=frozenset({"up"})))  # Main Menu
         self._frame(game, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(game.state, GameState.ATTRACT)
         self.assertEqual(game.score.high_score, abandoned_score)
@@ -434,7 +434,7 @@ class GoBackOneLevelTests(unittest.TestCase):
         game.score.score = 1234
         game.score.lives = 1
         self._frame(game, RawInput(pressed_buttons=frozenset({config.BUTTON_P1})))
-        self._frame(game, RawInput(pressed_keys=frozenset({"down"})))
+        self._frame(game, RawInput(pressed_keys=frozenset({"up"})))  # Main Menu
         self._frame(game, RawInput(pressed_keys=frozenset({"return"})))
         self.assertEqual(game.state, GameState.ATTRACT)
         self._frame(game, RawInput())  # release before the fresh confirm press
